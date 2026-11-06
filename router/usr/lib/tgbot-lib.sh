@@ -176,7 +176,7 @@ set_name() {   # $1 = mac, $2.. = имя
 # ---------- обработка команд ----------
 handle() {
     text="$1"
-    cmd=${text%% *}
+    cmd=${text%% *}; cmd=${cmd%%@*}
     args=""; case "$text" in *" "*) args=${text#* } ;; esac
     case "$cmd" in
         /status)    send "$(status)" ;;
@@ -244,7 +244,7 @@ handle() {
             send_kb "Перезагрузить роутер? Интернет пропадёт примерно на 2 минуты." \
                 '{"inline_keyboard":[[{"text":"Да, перезагрузить","callback_data":"reboot:yes"},{"text":"Отмена","callback_data":"reboot:no"}]]}' ;;
         /start|/help)
-            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN (/vpn add Имя, /vpn del Имя)\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/blocked — список заблокированных\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/menu — панель кнопок\n/watch — выбрать устройство для слежения (или /watch <устройство> home|alive), /unwatch, /watching\n/home — кто дома\n/scan <устройство> — проверка открытых портов\n/site add|del, /sites — мониторинг сайтов\n/speedhist — история скорости\n/backup — зашифрованный бэкап конфигурации\n/digest — итоги недели\n/reboot — перезагрузить роутер')" ;;
+            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN (/vpn add Имя, /vpn del Имя)\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/blocked — список заблокированных\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/menu — панель кнопок\n/watch — выбрать устройство для слежения (или /watch <устройство> home|alive), /unwatch\n/home — кто дома\n/scan <устройство> — проверка открытых портов\n/site add|del, /sites — мониторинг сайтов\n/speedhist — история скорости\n/backup — зашифрованный бэкап конфигурации\n/digest — итоги недели\n/reboot — перезагрузить роутер')" ;;
         *) send "Не понял. Список команд: /help" ;;
     esac
 }

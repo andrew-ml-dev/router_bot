@@ -163,7 +163,7 @@ menu_panel() {
         "Статус	cmd:status	Кто в сети	cmd:clients" \
         "Кто дома	cmd:home	VPN	cmd:vpn" \
         "Скорость	cmd:speedtest	Отчёт DNS	cmd:report" \
-        "Слежение	cmd:watching	Заблокированные	cmd:blocked" \
+        "Слежение	cmd:watch	Заблокированные	cmd:blocked" \
         "Сайты	cmd:sites	История скорости	cmd:speedhist" \
         "Помощь	cmd:help	Итоги недели	cmd:digest" | json_kb)"
 }
@@ -180,7 +180,6 @@ set_commands() {
 {"command":"report","description":"DNS и блокировки за 24 часа"},
 {"command":"watch","description":"Выбрать устройство для слежения"},
 {"command":"unwatch","description":"Убрать устройство из слежения"},
-{"command":"watching","description":"За чем слежу"},
 {"command":"block","description":"Заблокировать устройство"},
 {"command":"unblock","description":"Разблокировать устройство"},
 {"command":"blocked","description":"Список заблокированных"},

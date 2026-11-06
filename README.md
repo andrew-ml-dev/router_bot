@@ -1,7 +1,7 @@
 # flint2-telegram-bot
 
 Лёгкий Telegram-бот для роутеров **GL.iNet Flint 2 (GL-MT6000)** и других устройств на **OpenWrt / GL.iNet 4.x**.
-Работает прямо на роутере, написан на `sh` + `curl` + `jq`, занимает около **60 КБ** и почти не нагружает процессор.
+Работает прямо на роутере, написан на `sh` + `curl` + `jq`, занимает около **70 КБ** и почти не нагружает процессор.
 
 > English: a tiny shell-only Telegram bot that runs on a GL.iNet/OpenWrt router. It sends alerts
 > (new devices, VPN events, internet outages, DNS anomalies, hardware warnings) and answers commands

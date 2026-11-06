@@ -15,6 +15,9 @@ fi
 mkdir "$LOCK" 2>/dev/null || exit 0
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
+# ---- сторож: если задан HC_URL (healthchecks.io), раз в минуту сообщаем, что роутер жив ----
+[ -n "$HC_URL" ] && curl -s -m 10 -o /dev/null "$HC_URL" 2>/dev/null
+
 # ---- загрузка ----
 if [ ! -e "$BOOTFLAG" ]; then
     if send "$(printf 'Роутер загрузился\n\n%s' "$(status)")"; then
@@ -49,12 +52,12 @@ vendor() {
 [ -e "$KNOWN" ] || { first_run=1; touch "$KNOWN"; }
 awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print tolower($4), $1}' /proc/net/arp | while read mac ip; do
     grep -qi "^$mac\$" "$KNOWN" && continue
-    echo "$mac" >> "$KNOWN"
-    if [ -z "$first_run" ]; then
+    if [ -n "$first_run" ]; then echo "$mac" >> "$KNOWN"; continue; fi
+    if true; then
         send_kb "$(printf 'Новое устройство в сети\nИмя: %s\nПроизводитель: %s\nПодключение: %s\nIP: %s\nMAC: %s\n\n%s' \
             "$(devname "$mac")" "$(vendor "$mac")" "$(connection "$mac")" "$ip" "$mac" "$(lua /usr/bin/tgbot-scan.lua "$ip")")" \
-            "{\"inline_keyboard\":[[{\"text\":\"Знаю\",\"callback_data\":\"allow:$mac\"},{\"text\":\"Заблокировать\",\"callback_data\":\"block:$mac\"}]]}"
-        log_event new "$(devname "$mac") ($mac)"
+            "{\"inline_keyboard\":[[{\"text\":\"Знаю\",\"callback_data\":\"allow:$mac\"},{\"text\":\"Заблокировать\",\"callback_data\":\"block:$mac\"}]]}" \
+            && { echo "$mac" >> "$KNOWN"; log_event new "$(devname "$mac") ($mac)"; }
         sleep 1
     fi
 done
