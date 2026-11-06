@@ -14,6 +14,6 @@ done
 scp -O -q "$DIR/usr/lib/tgbot-lib.sh" "$DIR/usr/lib/tgbot-ext.sh" "$HOST:/usr/lib/"
 scp -O -q "$DIR/etc/init.d/tgbot" "$HOST:/etc/init.d/tgbot"
 ssh "$HOST" 'chmod 755 /usr/bin/tgbot*.sh /usr/bin/tgbot*.lua /usr/bin/tgbot-ctl /etc/init.d/tgbot
-for f in /etc/tgbot.pause; do grep -qxF "$f" /etc/sysupgrade.conf 2>/dev/null || echo "$f" >> /etc/sysupgrade.conf; done
+for f in /etc/tgbot.pause /etc/tgbot.hooks/away /etc/tgbot.hooks/home; do grep -qxF "$f" /etc/sysupgrade.conf 2>/dev/null || echo "$f" >> /etc/sysupgrade.conf; done
 tgbot-ctl on; sleep 2; tgbot-ctl status'
 echo "Готово. Слушатель перезапущен."

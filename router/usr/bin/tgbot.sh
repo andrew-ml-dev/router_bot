@@ -154,6 +154,7 @@ fi
 
 # ---- слежение: люди дома, «живые» устройства, сайты ----
 watch_tick
+house_tick
 pause_tick
 [ $(( mm % 2 )) -eq 0 ] && sites_tick
 

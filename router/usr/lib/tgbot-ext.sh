@@ -616,3 +616,26 @@ flush_outbox() {
         send "$(cat "$OUTBOX/$f")" && rm -f "$OUTBOX/$f" || break
     done
 }
+
+# ---------- состояние дома: «кто-то дома» / «никого нет» ----------
+HOOKS=/etc/tgbot.hooks       # исполняемые файлы away и home: вызываются при смене состояния
+HOUSE=/tmp/tgbot.house
+house_tick() {   # cron: учитывает только устройства в режиме home; пока состояние неясно, молчит
+    [ -s "$WATCH" ] || return
+    hp=0; hh=0; hu=0
+    while IFS='=' read -r hm hmode; do
+        [ "$hmode" = "home" ] || continue
+        hp=1
+        hsf="/tmp/tgbot.w.$(echo "$hm" | tr -d :)"
+        if [ -f "$hsf" ]; then read hst _ < "$hsf"; [ "$hst" = "here" ] && hh=1; else hu=1; fi
+    done < "$WATCH"
+    [ "$hp" = 1 ] && [ "$hu" = 0 ] || return
+    hnew=home; [ "$hh" = 0 ] && hnew=empty
+    hprev=$(cat "$HOUSE" 2>/dev/null)
+    echo "$hnew" > "$HOUSE"
+    [ -n "$hprev" ] && [ "$hprev" != "$hnew" ] || return
+    if [ "$hnew" = empty ]; then hk=away; qsend "🏠 Дома никого. Запускаю сценарий «ушли»."
+    else hk=home; qsend "🏠 Кто-то дома. Запускаю сценарий «пришли»."; fi
+    log_event house "$hk"
+    [ -x "$HOOKS/$hk" ] && ( "$HOOKS/$hk" >/dev/null 2>&1 & )
+}

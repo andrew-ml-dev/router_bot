@@ -85,6 +85,7 @@ tgbot-ctl remove [--purge] # удалить бота (--purge: вместе с �
 - [Команды и уведомления](docs/COMMANDS.md)
 - [Как это устроено](docs/ARCHITECTURE.md)
 - [Настройка роутера: AdGuard Home, WireGuard, безопасность](docs/ROUTER-SETUP.md)
+- [Home Assistant: «никого нет дома»](docs/HOME-ASSISTANT.md)
 - [Бэкап конфигурации](docs/BACKUP.md)
 - [Безопасность бота](docs/SECURITY.md)
 - [Решение проблем](docs/TROUBLESHOOTING.md)
