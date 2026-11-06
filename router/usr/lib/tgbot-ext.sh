@@ -213,7 +213,7 @@ watching() {
         if [ -f "$sf" ]; then
             read state miss since < "$sf"
             if [ "$state" = "here" ]; then st="на месте"; else st="нет"; fi
-            [ -n "$since" ] && st="$st, $(fmt_dur $((now - since)))"
+            [ -n "$since" ] && [ "$since" -gt 0 ] && st="$st, $(fmt_dur $((now - since)))"
         fi
         lbl="дом"; [ "$mode" = "alive" ] && lbl="живое"
         echo "$(devname "$mac") [$lbl]: $st"
@@ -221,19 +221,42 @@ watching() {
 }
 
 who_home() {
-    [ -s "$WATCH" ] || { echo "Нет отслеживаемых людей. Добавьте: /watch <устройство> home"; return; }
-    in=""; out=""
+    [ -s "$WATCH" ] || { echo "Слежение не настроено. Нажмите /watch и выберите устройства."; return; }
+    now=$(date +%s); ppl=""; dev=""
     while IFS='=' read -r mac mode; do
-        [ "$mode" = "home" ] || continue
+        [ -n "$mac" ] || continue
         sf="/tmp/tgbot.w.$(echo "$mac" | tr -d :)"
-        state=""; [ -f "$sf" ] && read state _ _ < "$sf"
-        if [ "$state" = "here" ]; then in="$in  $(devname "$mac")
-"; else out="$out  $(devname "$mac")
-"; fi
+        state=""; since=""
+        [ -f "$sf" ] && read state _ since < "$sf"
+        name=$(devname "$mac")
+        dur=""; [ -n "$since" ] && [ "$since" -gt 0 ] && dur=", $(fmt_dur $((now - since)))"
+        if [ "$mode" = "home" ]; then
+            case "$state" in
+                here) l="✓ $name: дома$dur" ;;
+                away) l="✗ $name: нет дома$dur" ;;
+                *)    l="… $name: проверяю" ;;
+            esac
+            ppl="$ppl$l
+"
+        else
+            case "$state" in
+                here) l="✓ $name: в сети$dur" ;;
+                away) l="✗ $name: нет в сети$dur" ;;
+                *)    l="… $name: проверяю" ;;
+            esac
+            dev="$dev$l
+"
+        fi
     done < "$WATCH"
-    printf 'Дома:\n%s\nНет дома:\n%s' "${in:-  никого
-}" "${out:-  никого
-}"
+    out="Кто дома
+"
+    if [ -n "$ppl" ]; then out="$out$ppl"
+    else out="${out}Людей под слежением нет. Нажмите /watch и выберите «Дом: ...».
+"; fi
+    [ -n "$dev" ] && out="$out
+Устройства
+$dev"
+    printf '%s' "$out"
 }
 
 # вызывается из cron раз в минуту
@@ -246,7 +269,7 @@ watch_tick() {
         name=$(devname "$mac")
         if is_present "$mac"; then cur=up; else cur=down; fi
         if [ ! -f "$sf" ]; then            # первый запуск: запомнить без уведомлений
-            if [ "$cur" = "up" ]; then echo "here 0 $now" > "$sf"; else echo "away 0 $now" > "$sf"; fi
+            if [ "$cur" = "up" ]; then echo "here 0 0" > "$sf"; else echo "away 0 0" > "$sf"; fi
             continue
         fi
         read state miss since < "$sf"
