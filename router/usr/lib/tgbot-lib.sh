@@ -36,7 +36,7 @@ mac2ip() { awk -v m="$(lc "$1")" 'tolower($4)==m {print $1; exit}' /proc/net/arp
 
 ipname() {    # IP -> имя (или сам IP)
     m=$(ip2mac "$1")
-    if [ -n "$m" ]; then echo "$(devname "$m")"; else echo "$1"; fi
+    if [ -n "$m" ]; then echo "$(devname "$m")"; else v=$(vpn_ipname "$1"); echo "${v:-$1}"; fi
 }
 
 target_mac() {   # IP | MAC | часть имени -> MAC

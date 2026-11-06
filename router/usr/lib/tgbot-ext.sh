@@ -571,10 +571,14 @@ pause_dur_menu() {   # mac
 
 # ---------- /who: что открывает устройство ----------
 who_dev() {
-    wm=$(target_mac "$1")
-    [ -n "$wm" ] || { echo "Не нашёл устройство: $1"; return; }
-    wip=$(mac2ip "$wm")
-    [ -n "$wip" ] || { echo "У $(devname "$wm") нет IP: устройство не в сети."; return; }
+    wm=$(target_mac "$1"); wip=""; wlbl=""
+    if [ -n "$wm" ]; then wip=$(mac2ip "$wm"); wlbl=$(devname "$wm")
+    else
+        vs=$(vpn_find "$1")
+        [ -n "$vs" ] && { wip=$(uci -q get "wireguard_server.$vs.client_ip" | cut -d/ -f1); wlbl="VPN $1"; }
+    fi
+    [ -n "$wlbl" ] || { echo "Не нашёл устройство: $1"; return; }
+    [ -n "$wip" ] || { echo "У $wlbl нет IP: устройство не в сети."; return; }
     [ -s "$QLOG" ] || { echo "Журнал AdGuard пуст."; return; }
     wc=$(date -u -d "@$(( $(date +%s) - 86400 ))" +%Y-%m-%dT%H:%M 2>/dev/null)
     jq -c --arg c "$wc" --arg ip "$wip" 'select(.IP==$ip and .T > $c)' "$QLOG" 2>/dev/null > /tmp/tgbot.who
@@ -582,11 +586,18 @@ who_dev() {
     wb=$(jq -c 'select(.Result.IsFiltered==true)' /tmp/tgbot.who 2>/dev/null | wc -l)
     wtop=$(jq -r '.QH' /tmp/tgbot.who 2>/dev/null | sort | uniq -c | sort -rn | head -10 | awk '{print "  "$2" ("$1")"}')
     rm -f /tmp/tgbot.who
-    printf '%s (%s) за 24 часа\nЗапросов: %s, заблокировано: %s\n\nЧаще всего:\n%s' "$(devname "$wm")" "$wip" "$wt" "$wb" "${wtop:-  нет данных}"
+    printf '%s (%s) за 24 часа\nЗапросов: %s, заблокировано: %s\n\nЧаще всего:\n%s' "$wlbl" "$wip" "$wt" "$wb" "${wtop:-  нет данных}"
 }
 who_lines() {
     awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print tolower($4)}' /proc/net/arp | while read -r m; do
         printf '%s\twho:%s\n' "$(devname "$m")" "$m"
+    done
+    vpn_names | while read -r n; do printf 'VPN: %s\twho:%s\n' "$n" "$n"; done
+}
+
+vpn_ipname() {   # 10.0.0.x -> имя VPN-пользователя
+    for sec in $(uci -q show wireguard_server | grep -o 'peer_[0-9]*=peers' | cut -d= -f1); do
+        case "$(uci -q get "wireguard_server.$sec.client_ip")" in "$1"/*) echo "VPN $(uci -q get "wireguard_server.$sec.name")"; return ;; esac
     done
 }
 
