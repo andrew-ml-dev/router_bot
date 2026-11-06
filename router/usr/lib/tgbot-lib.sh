@@ -200,7 +200,8 @@ handle() {
             [ -n "$args" ] || { watch_menu; return; }
             t=${args%% *}; md=""; case "$args" in *" "*) md=${args#* } ;; esac
             send "$(watch_add "$t" "$md")" ;;
-        /unwatch)   [ -n "$args" ] && send "$(watch_del "$args")" || send "Использование: /unwatch <устройство>" ;;
+        /unwatch)   if [ -n "$args" ]; then send "$(watch_del "$args")"; else unwatch_menu; fi ;;
+        /menu)      menu_panel ;;
         /watching)  send "$(watching)" ;;
         /home)      send "$(who_home)" ;;
         /scan)      [ -n "$args" ] || { send "Использование: /scan <устройство>"; return; }
@@ -220,13 +221,13 @@ handle() {
         /speedtest) send "Меряю скорость, это займёт около 20 секунд..."; send "$(speedtest)" ;;
         /blocked)   send "$(blocked_list)" ;;
         /block)
-            [ -n "$args" ] || { send "Использование: /block <IP | MAC | имя>"; return; }
+            [ -n "$args" ] || { block_menu; return; }
             m=$(target_mac "$args")
             if [ -z "$m" ]; then send "Не нашёл устройство: $args"
             elif [ "$m" = "$(router_mac)" ]; then send "Сам роутер блокировать нельзя."
             else do_block "$m"; send "Заблокировано: $(devname "$m") ($m). Вернуть: /unblock $(devname "$m")"; fi ;;
         /unblock)
-            [ -n "$args" ] || { send "Использование: /unblock <IP | MAC | имя>"; return; }
+            [ -n "$args" ] || { unblock_menu; return; }
             m=$(target_mac "$args")
             if [ -z "$m" ]; then send "Не нашёл устройство: $args"
             else do_unblock "$m"; send "Разблокировано: $(devname "$m") ($m)"; fi ;;
@@ -243,31 +244,45 @@ handle() {
             send_kb "Перезагрузить роутер? Интернет пропадёт примерно на 2 минуты." \
                 '{"inline_keyboard":[[{"text":"Да, перезагрузить","callback_data":"reboot:yes"},{"text":"Отмена","callback_data":"reboot:no"}]]}' ;;
         /start|/help)
-            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN (/vpn add Имя, /vpn del Имя)\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/blocked — список заблокированных\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/watch — выбрать устройство для слежения (или /watch <устройство> home|alive), /unwatch, /watching\n/home — кто дома\n/scan <устройство> — проверка открытых портов\n/site add|del, /sites — мониторинг сайтов\n/speedhist — история скорости\n/backup — зашифрованный бэкап конфигурации\n/digest — итоги недели\n/reboot — перезагрузить роутер')" ;;
+            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN (/vpn add Имя, /vpn del Имя)\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/blocked — список заблокированных\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/menu — панель кнопок\n/watch — выбрать устройство для слежения (или /watch <устройство> home|alive), /unwatch, /watching\n/home — кто дома\n/scan <устройство> — проверка открытых портов\n/site add|del, /sites — мониторинг сайтов\n/speedhist — история скорости\n/backup — зашифрованный бэкап конфигурации\n/digest — итоги недели\n/reboot — перезагрузить роутер')" ;;
         *) send "Не понял. Список команд: /help" ;;
     esac
 }
 
-# нажатия на кнопки
+# нажатия на кнопки (CB_MID: id сообщения с кнопкой; текст сообщения в /tmp/tgbot.cbtext)
 handle_cb() {
     data="$1"
     case "$data" in
-        allow:*)  m=${data#allow:}; send "Ок, оставляем: $(devname "$m") ($m)" ;;
+        allow:*)  m=${data#allow:}; ui_done "✓ Известное устройство: $(devname "$m")" ;;
+        bk:*)
+            m=${data#bk:}
+            send_kb "Заблокировать $(devname "$m") ($m)? Устройство потеряет интернет." \
+                "{\"inline_keyboard\":[[{\"text\":\"Да, заблокировать\",\"callback_data\":\"block:$m\"},{\"text\":\"Отмена\",\"callback_data\":\"cancel:0\"}]]}" ;;
         block:*)
             m=${data#block:}
-            if [ "$m" = "$(router_mac)" ]; then send "Сам роутер блокировать нельзя."
-            else do_block "$m"; send "Заблокировано: $(devname "$m") ($m). Вернуть: /unblock $m"; fi ;;
-        reboot:yes) send "Перезагружаюсь. Напишу, когда вернусь."; ( sleep 3; reboot ) >/dev/null 2>&1 & ;;
-        reboot:no)  send "Отмена, роутер не перезагружаю." ;;
-        vpnadd:*)
-            id=${data#vpnadd:}; n=$(cat "/tmp/tgbot.pend.$id" 2>/dev/null); rm -f "/tmp/tgbot.pend.$id"
-            if vpn_name_ok "$n"; then vpn_add "$n"; else send "Запрос устарел, повторите /vpn add Имя."; fi ;;
-        vpndel:*)
-            id=${data#vpndel:}; n=$(cat "/tmp/tgbot.pend.$id" 2>/dev/null); rm -f "/tmp/tgbot.pend.$id"
-            if vpn_name_ok "$n"; then send "$(vpn_del "$n")"; else send "Запрос устарел, повторите /vpn del Имя."; fi ;;
+            if [ "$m" = "$(router_mac)" ]; then ui_done "Сам роутер блокировать нельзя."
+            else do_block "$m"; ui_done "✗ Заблокировано: $(devname "$m"). Вернуть: /unblock"; block_picker_refresh; fi ;;
+        ub:*)
+            m=${data#ub:}; do_unblock "$m"
+            refresh_list "$CB_MID" "Кого разблокировать?" unblock_lines "Готово: заблокированных устройств больше нет. Разблокировано: $(devname "$m")" ;;
+        uw:*)
+            m=${data#uw:}; res=$(watch_del "$m")
+            refresh_list "$CB_MID" "Что убрать из слежения?" unwatch_lines "$res. Больше ни за чем не слежу." ;;
         w:home:*|w:alive:*)
             md=${data#w:}; md=${md%%:*}; m=${data#w:$md:}
-            send "$(watch_add "$m" "$md")" ;;
-        cancel:*)   rm -f "/tmp/tgbot.pend.${data#cancel:}"; send "Отменено." ;;
+            watch_tap "$md" "$m" ;;
+        reboot:yes) ui_done "✓ Перезагружаюсь, напишу, когда вернусь."; ( sleep 3; reboot ) >/dev/null 2>&1 & ;;
+        reboot:no)  ui_done "Отмена, роутер не перезагружаю." ;;
+        vpnadd:*)
+            id=${data#vpnadd:}; n=$(cat "/tmp/tgbot.pend.$id" 2>/dev/null); rm -f "/tmp/tgbot.pend.$id"
+            if vpn_name_ok "$n"; then
+                if vpn_add "$n"; then ui_done "✓ VPN-пользователь $n создан: QR и конфиг выше (удалятся через 2 минуты)."
+                else ui_done "✗ Не удалось создать $n."; fi
+            else ui_done "Запрос устарел, повторите /vpn add Имя."; fi ;;
+        vpndel:*)
+            id=${data#vpndel:}; n=$(cat "/tmp/tgbot.pend.$id" 2>/dev/null); rm -f "/tmp/tgbot.pend.$id"
+            if vpn_name_ok "$n"; then r=$(vpn_del "$n"); ui_done "✓ $r"; else ui_done "Запрос устарел, повторите /vpn del Имя."; fi ;;
+        cancel:*)   rm -f "/tmp/tgbot.pend.${data#cancel:}"; ui_done "Отменено." ;;
+        cmd:*)      handle "/${data#cmd:}" ;;
     esac
 }

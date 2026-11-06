@@ -10,18 +10,23 @@ if [ ! -s "$OFFSET" ]; then
     [ -n "$last" ] && echo $((last + 1)) > "$OFFSET"
 fi
 off=$(cat "$OFFSET" 2>/dev/null || echo 0)
+set_commands   # подсказки команд при вводе «/»
 
 while true; do
     upd=$(curl -s -m 65 "$API/getUpdates?offset=$off&timeout=50" 2>/dev/null)
     if [ -z "$upd" ]; then sleep 5; continue; fi
-    echo "$upd" | jq -r '.result[]? | if .callback_query then [.update_id, (.callback_query.message.chat.id|tostring), "c", (.callback_query.data // ""), .callback_query.id] else [.update_id, (.message.chat.id|tostring), "m", (.message.text // ""), "-"] end | @tsv' > /tmp/tgbot.upd 2>/dev/null
-    while IFS="$(printf '\t')" read id chat kind data cbid; do
+    echo "$upd" | jq -r '.result[]? | if .callback_query then [.update_id, (.callback_query.message.chat.id|tostring), "c", (.callback_query.data // ""), .callback_query.id, (.callback_query.message.message_id|tostring)] else [.update_id, (.message.chat.id|tostring), "m", (.message.text // ""), "-", "-"] end | @tsv' > /tmp/tgbot.upd 2>/dev/null
+    while IFS="$(printf '\t')" read id chat kind data cbid mid; do
         [ -n "$id" ] || continue
         off=$((id + 1)); echo "$off" > "$OFFSET"
         [ "$chat" = "$CHAT_ID" ] || continue
         if [ "$kind" = "c" ]; then
             answer_cb "$cbid"
+            CB_MID=$mid
+            # исходный текст сообщения с кнопкой (нужен, чтобы дописать результат)
+            echo "$upd" | jq -r --arg id "$cbid" '.result[] | select(.callback_query.id==$id) | .callback_query.message.text // ""' > /tmp/tgbot.cbtext 2>/dev/null
             handle_cb "$data"
+            CB_MID=""
         else
             handle "$data"
         fi

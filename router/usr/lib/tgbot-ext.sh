@@ -56,8 +56,44 @@ watch_add() {   # устройство [home|alive]
     echo "Слежу за $(devname "$m") ($m), режим: $mode"
 }
 
-# устройства, которые можно добавить в слежение: сначала активные, потом известные DHCP
-watch_candidates() {   # печатает строки "подпись<TAB>mac"
+# ---------- интерфейс: плитки и редактирование сообщений ----------
+tg_edit_text() {   # message_id текст [разметка]; по умолчанию кнопки убираются
+    mk=$3; [ -n "$mk" ] || mk='{"inline_keyboard":[]}'
+    curl -s -m 15 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "message_id=$1" \
+        --data-urlencode "text=$2" --data-urlencode "reply_markup=$mk" "$API/editMessageText" | grep -q '"ok":true'
+}
+
+send_kb_mid() {    # файл_для_message_id текст разметка
+    r=$(curl -s -m 15 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$2" \
+        --data-urlencode "reply_markup=$3" "$API/sendMessage")
+    echo "$r" | jq -r '.result.message_id // empty' > "$1"
+    echo "$r" | grep -q '"ok":true'
+}
+
+# строки "подпись<TAB>callback[<TAB>подпись<TAB>callback]" -> inline-клавиатура (одна строка плиток на строку ввода)
+json_kb() {
+    jq -Rn '[inputs | split("\t") | [range(0; length; 2) as $i | {text: .[$i], callback_data: .[$i+1]}]]
+            | {inline_keyboard: .}'
+}
+
+# ответ на нажатие: убрать плитки у сообщения и дописать результат
+ui_done() {
+    [ -n "$CB_MID" ] || return 0
+    orig=$(cat /tmp/tgbot.cbtext 2>/dev/null)
+    tg_edit_text "$CB_MID" "$orig
+
+$1"
+}
+
+# обновить список-плитки на месте: message_id заголовок функция_строк текст_если_пусто
+refresh_list() {
+    lines=$($3)
+    if [ -z "$lines" ]; then tg_edit_text "$1" "$4"
+    else tg_edit_text "$1" "$2" "$(printf '%s\n' "$lines" | json_kb)"; fi
+}
+
+# --- слежение: выбор устройства
+watch_lines() {   # устройства, которые можно добавить: сначала активные, потом известные DHCP
     rmac=$(router_mac)
     { awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print tolower($4)}' /proc/net/arp
       awk '{print tolower($2)}' /tmp/dhcp.leases 2>/dev/null; } | awk 'NF && !seen[$0]++' | while read -r m; do
@@ -65,23 +101,108 @@ watch_candidates() {   # печатает строки "подпись<TAB>mac"
         grep -qi "^$m=" "$WATCH" 2>/dev/null && continue
         n=$(devname "$m"); ip=$(mac2ip "$m")
         if [ "$n" = "безымянное" ]; then n="безымянное (.${ip##*.})"; [ -z "$ip" ] && n="безымянное ($m)"; fi
-        printf '%s\t%s\n' "$n" "$m"
+        printf 'Дом: %s\tw:home:%s\tЖивое: %s\tw:alive:%s\n' "$n" "$m" "$n" "$m"
     done | head -30
 }
-
-watch_menu() {   # отправляет список с кнопками
-    c=$(watch_candidates)
-    if [ -z "$c" ]; then
-        send "Все известные устройства уже под слежением. Список: /watching"
-        return
-    fi
-    kb=$(printf '%s\n' "$c" | jq -Rn '[inputs | split("\t") | {n: .[0], m: .[1]}]
-        | {inline_keyboard: [ .[] | [ {text: ("Дом: " + .n), callback_data: ("w:home:" + .m)},
-                                      {text: ("Живое: " + .n), callback_data: ("w:alive:" + .m)} ] ]}')
-    send_kb "Выберите устройство для слежения.
+WATCH_TEXT="Выберите устройство для слежения.
 Дом: человек (уведомлю, когда придёт и уйдёт)
-Живое: принтер, пылесос и т.п. (уведомлю, если пропадёт больше чем на час)
-Добавлено сейчас: $(grep -c . "$WATCH" 2>/dev/null || echo 0)" "$kb"
+Живое: принтер, пылесос и т.п. (уведомлю, если пропадёт больше чем на час)"
+watch_menu() {
+    l=$(watch_lines)
+    if [ -z "$l" ]; then send "Все известные устройства уже под слежением. Список: /watching"; return; fi
+    send_kb "$WATCH_TEXT" "$(printf '%s\n' "$l" | json_kb)"
+}
+watch_tap() {   # режим mac
+    res=$(watch_add "$2" "$1")
+    lines=$(watch_lines)
+    if [ -z "$lines" ]; then tg_edit_text "$CB_MID" "$res
+
+Все известные устройства под слежением. Список: /watching"
+    else tg_edit_text "$CB_MID" "$WATCH_TEXT
+
+✓ $res" "$(printf '%s\n' "$lines" | json_kb)"; fi
+}
+
+# --- снять слежение
+unwatch_lines() {
+    [ -s "$WATCH" ] || return
+    while IFS='=' read -r mac mode; do
+        [ -n "$mac" ] || continue
+        l="дом"; [ "$mode" = "alive" ] && l="живое"
+        printf 'Убрать: %s [%s]\tuw:%s\n' "$(devname "$mac")" "$l" "$mac"
+    done < "$WATCH"
+}
+unwatch_menu() {
+    l=$(unwatch_lines)
+    if [ -z "$l" ]; then send "Ни за чем не слежу. Добавить: /watch"; return; fi
+    send_kb "Что убрать из слежения?" "$(printf '%s\n' "$l" | json_kb)"
+}
+
+# --- блокировка
+block_lines() {   # активные устройства, которые ещё не заблокированы
+    rmac=$(router_mac)
+    awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print tolower($4)}' /proc/net/arp | while read -r m; do
+        [ "$m" = "$rmac" ] && continue
+        is_blocked "$m" && continue
+        printf 'Блок: %s\tbk:%s\n' "$(devname "$m")" "$m"
+    done
+}
+block_menu() {
+    l=$(block_lines)
+    if [ -z "$l" ]; then send "Нет активных устройств для блокировки."; return; fi
+    send_kb_mid /tmp/tgbot.pk.block "Какое устройство заблокировать? (потребуется подтверждение)" "$(printf '%s\n' "$l" | json_kb)"
+}
+block_picker_refresh() {
+    [ -s /tmp/tgbot.pk.block ] || return
+    refresh_list "$(cat /tmp/tgbot.pk.block)" "Какое устройство заблокировать? (потребуется подтверждение)" block_lines "Больше нет активных устройств для блокировки."
+}
+unblock_lines() {
+    for m in $(uci -q get gl_block.block_mac.mac); do
+        printf 'Вернуть: %s\tub:%s\n' "$(devname "$m")" "$(lc "$m")"
+    done
+}
+unblock_menu() {
+    l=$(unblock_lines)
+    if [ -z "$l" ]; then send "Заблокированных устройств нет."; return; fi
+    send_kb "Кого разблокировать?" "$(printf '%s\n' "$l" | json_kb)"
+}
+
+# --- панель команд и подсказки при вводе «/»
+menu_panel() {
+    send_kb "Меню" "$(printf '%s\n' \
+        "Статус	cmd:status	Кто в сети	cmd:clients" \
+        "Кто дома	cmd:home	VPN	cmd:vpn" \
+        "Скорость	cmd:speedtest	Отчёт DNS	cmd:report" \
+        "Слежение	cmd:watching	Заблокированные	cmd:blocked" \
+        "Сайты	cmd:sites	История скорости	cmd:speedhist" \
+        "Помощь	cmd:help	Итоги недели	cmd:digest" | json_kb)"
+}
+
+set_commands() {
+    curl -s -m 15 -H 'Content-Type: application/json' -d '{"commands":[
+{"command":"menu","description":"Панель быстрых команд"},
+{"command":"status","description":"Состояние роутера"},
+{"command":"clients","description":"Кто в сети"},
+{"command":"home","description":"Кто дома"},
+{"command":"vpn","description":"VPN: кто подключён, /vpn add Имя"},
+{"command":"speedtest","description":"Замер скорости интернета"},
+{"command":"speedhist","description":"История скорости"},
+{"command":"report","description":"DNS и блокировки за 24 часа"},
+{"command":"watch","description":"Выбрать устройство для слежения"},
+{"command":"unwatch","description":"Убрать устройство из слежения"},
+{"command":"watching","description":"За чем слежу"},
+{"command":"block","description":"Заблокировать устройство"},
+{"command":"unblock","description":"Разблокировать устройство"},
+{"command":"blocked","description":"Список заблокированных"},
+{"command":"scan","description":"Открытые порты устройства"},
+{"command":"wake","description":"Включить устройство по сети"},
+{"command":"site","description":"Мониторинг сайтов: add / del"},
+{"command":"sites","description":"Статус сайтов"},
+{"command":"name","description":"Задать имя устройству"},
+{"command":"backup","description":"Зашифрованный бэкап настроек"},
+{"command":"digest","description":"Итоги недели"},
+{"command":"reboot","description":"Перезагрузить роутер"},
+{"command":"help","description":"Список команд"}]}' "$API/setMyCommands" >/dev/null 2>&1
 }
 
 watch_del() {
