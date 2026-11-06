@@ -1,6 +1,7 @@
 #!/bin/sh
 # Периодические проверки бота (cron, раз в минуту):
-# загрузка, новые устройства, перебор SSH, VPN-события, пропажа интернета, утренний отчёт
+# загрузка, новые устройства (+проверка портов), перебор SSH, VPN-события, пропажа интернета,
+# слежение за устройствами и сайтами, аномалии DNS, железо, история скорости, бэкап, отчёты
 . /usr/lib/tgbot-lib.sh
 KNOWN=/etc/tgbot.known          # известные MAC (переживает перезагрузку)
 BOOTFLAG=/tmp/tgbot.booted
@@ -53,6 +54,8 @@ awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print tolower($4), $1}' /proc/net/arp | 
         send_kb "$(printf 'Новое устройство в сети\nИмя: %s\nПроизводитель: %s\nПодключение: %s\nIP: %s\nMAC: %s' \
             "$(devname "$mac")" "$(vendor "$mac")" "$(connection "$mac")" "$ip" "$mac")" \
             "{\"inline_keyboard\":[[{\"text\":\"Знаю\",\"callback_data\":\"allow:$mac\"},{\"text\":\"Заблокировать\",\"callback_data\":\"block:$mac\"}]]}"
+        log_event new "$(devname "$mac") ($mac)"
+        send "$(scan_device "$mac")"
         sleep 1
     fi
 done
@@ -91,7 +94,7 @@ if ping -c1 -W3 1.1.1.1 >/dev/null 2>&1 || ping -c1 -W3 8.8.8.8 >/dev/null 2>&1;
     if [ -e "$DOWN" ]; then
         since=$(cat "$DOWN"); mins=$(( (now - since) / 60 ))
         if [ "$mins" -ge 2 ]; then
-            send "Интернет вернулся. Не было связи примерно $mins мин." && rm -f "$DOWN"
+            send "Интернет вернулся. Не было связи примерно $mins мин." && rm -f "$DOWN" && log_event wan "$mins"
         else
             rm -f "$DOWN"
         fi
@@ -143,6 +146,25 @@ if [ $(( mm % 10 )) -eq 0 ] && [ -s "$QLOG" ]; then
     done
     rm -f /tmp/tgbot.q10
 fi
+
+# ---- слежение: люди дома, «живые» устройства, сайты ----
+watch_tick
+[ $(( mm % 2 )) -eq 0 ] && sites_tick
+
+# ---- ночные и еженедельные задачи ----
+stamp=$(date +%u%H%M)
+today=$(date +%Y%m%d)
+run_once() {   # ключ команда...: не чаще раза в сутки
+    k=$1; shift
+    [ "$(cat "/tmp/tgbot.once.$k" 2>/dev/null)" = "$today" ] && return
+    echo "$today" > "/tmp/tgbot.once.$k"
+    "$@"
+}
+night_job() { traffic_snap; speed_daily; }
+backup_job() { r=$(do_backup) || send "Еженедельный бэкап не удался: $r"; }
+digest_job() { send "$(digest)"; }
+case "$(date +%H%M)" in 0400) run_once night night_job ;; esac
+case "$stamp" in 70300) run_once backup backup_job ;; 10910) run_once digest digest_job ;; esac
 
 # ---- утренний отчёт 09:00 ----
 if [ "$(date +%H%M)" = "0900" ] && [ "$(cat /tmp/tgbot.reportday 2>/dev/null)" != "$(date +%Y%m%d)" ]; then

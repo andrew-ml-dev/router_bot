@@ -31,15 +31,17 @@ case "$1" in
         ;;
     remove)
         "$0" off
-        rm -f /usr/bin/tgbot.sh /usr/bin/tgbot-poll.sh /usr/bin/tgbot-wol.lua /usr/lib/tgbot-lib.sh /etc/init.d/tgbot
+        rm -f /usr/bin/tgbot.sh /usr/bin/tgbot-poll.sh /usr/bin/tgbot-wol.lua /usr/bin/tgbot-png.lua /usr/bin/tgbot-scan.lua
+        rm -f /usr/lib/tgbot-lib.sh /usr/lib/tgbot-ext.sh /etc/init.d/tgbot
         rm -f /tmp/tgbot.* 2>/dev/null
         if [ "$2" = "--purge" ]; then
-            rm -f /etc/tgbot.conf /etc/tgbot.known /etc/tgbot.names
+            rm -f /etc/tgbot.conf /etc/tgbot.known /etc/tgbot.names /etc/tgbot.watch /etc/tgbot.sites /etc/tgbot.speed /etc/tgbot.events /etc/tgbot.traffic
+            sed -i '/tgbot/d' /etc/sysupgrade.conf 2>/dev/null
             rm -rf /root/tgbot-backup
             echo "Бот удалён полностью, токен и данные стёрты."
         else
             echo "Бот удалён. Токен и данные сохранены (/etc/tgbot.conf, tgbot.known, tgbot.names)."
-            echo "Чтобы стереть и их, выполните: rm /etc/tgbot.conf /etc/tgbot.known /etc/tgbot.names"
+            echo "Чтобы стереть и их, выполните: rm /etc/tgbot.*"
             echo "(в следующий раз используйте: tgbot-ctl remove --purge)"
         fi
         echo "Не забудьте отозвать токен в Telegram: @BotFather -> /revoke"

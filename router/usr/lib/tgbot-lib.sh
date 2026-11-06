@@ -119,12 +119,14 @@ named_top() {   # stdin: "N IP" -> "  Имя (N)"
     done
 }
 
-report() {
+report() {   # [секунд, по умолчанию 86400]
+    secs=${1:-86400}
+    if [ "$secs" -ge 604800 ]; then label="DNS за $((secs / 86400)) дней"; else label="DNS за 24 часа"; fi
     if [ ! -s "$QLOG" ]; then
         echo "Журнал запросов AdGuard пока пуст."
         return
     fi
-    cutoff=$(date -u -d "@$(( $(date +%s) - 86400 ))" +%Y-%m-%dT%H:%M 2>/dev/null)
+    cutoff=$(date -u -d "@$(( $(date +%s) - secs ))" +%Y-%m-%dT%H:%M 2>/dev/null)
     tmp=/tmp/tgbot.ql
     jq -c --arg c "$cutoff" 'select(.T > $c)' "$QLOG" 2>/dev/null > "$tmp"
     total=$(wc -l < "$tmp")
@@ -133,8 +135,8 @@ report() {
     topb=$(jq -r 'select(.Result.IsFiltered==true) | .QH' "$tmp" 2>/dev/null | sort | uniq -c | sort -rn | head -5 | awk '{print "  "$2" ("$1")"}')
     topc=$(jq -r '.IP' "$tmp" 2>/dev/null | sort | uniq -c | sort -rn | head -5 | named_top)
     rm -f "$tmp"
-    printf 'DNS за 24 часа\nЗапросов: %s\nЗаблокировано: %s (%s%%)\n\nТоп заблокированных:\n%s\n\nТоп устройств по запросам:\n%s' \
-        "$total" "$blocked" "$pct" "$topb" "$topc"
+    printf '%s\nЗапросов: %s\nЗаблокировано: %s (%s%%)\n\nТоп заблокированных:\n%s\n\nТоп устройств по запросам:\n%s' \
+        "$label" "$total" "$blocked" "$pct" "$topb" "$topc"
 }
 
 # ---------- действия ----------
@@ -144,11 +146,16 @@ wake() {
     lua /usr/bin/tgbot-wol.lua "$m" 2>&1 && echo "Отправил Wake-on-LAN для $(devname "$m") ($m)"
 }
 
-speedtest() {
+speedtest_raw() {   # печатает: загрузка отдача пинг (Мбит/с, мс)
     dl=$(curl -s -m 30 -o /dev/null -w '%{speed_download}' "https://speed.cloudflare.com/__down?bytes=50000000" 2>/dev/null)
     ul=$(head -c 20000000 /dev/zero | curl -s -m 30 -o /dev/null -w '%{speed_upload}' --data-binary @- "https://speed.cloudflare.com/__up" 2>/dev/null)
     png=$(ping -c4 -W2 1.1.1.1 2>/dev/null | awk -F'/' '/^round-trip|^rtt/ {printf "%.0f", $4}')
-    awk -v d="${dl:-0}" -v u="${ul:-0}" -v p="${png:-?}" 'BEGIN {printf "Скорость (Cloudflare)\nЗагрузка: %.0f Мбит/с\nОтдача: %.0f Мбит/с\nПинг: %s мс", d*8/1000000, u*8/1000000, p}'
+    awk -v d="${dl:-0}" -v u="${ul:-0}" -v p="${png:-0}" 'BEGIN {printf "%.0f %.0f %s", d*8/1000000, u*8/1000000, p}'
+}
+
+speedtest() {
+    set -- $(speedtest_raw)
+    printf 'Скорость (Cloudflare)\nЗагрузка: %s Мбит/с\nОтдача: %s Мбит/с\nПинг: %s мс' "$1" "$2" "$3"
 }
 
 blocked_list() {
@@ -164,6 +171,8 @@ set_name() {   # $1 = mac, $2.. = имя
     echo "$m=$*" >> "$NAMES"
 }
 
+. /usr/lib/tgbot-ext.sh
+
 # ---------- обработка команд ----------
 handle() {
     text="$1"
@@ -172,7 +181,41 @@ handle() {
     case "$cmd" in
         /status)    send "$(status)" ;;
         /clients)   send "$(printf 'Устройства в сети:\n%s' "$(clients)")" ;;
-        /vpn)       send "$(vpn)" ;;
+        /vpn)
+            sub=${args%% *}; rest=""; case "$args" in *" "*) rest=${args#* } ;; esac
+            case "$sub" in
+                add)
+                    vpn_name_ok "$rest" || { send "Использование: /vpn add Имя (латиница, цифры, - и _, до 24 символов)"; return; }
+                    id=$(date +%s); echo "$rest" > "/tmp/tgbot.pend.$id"
+                    send_kb "Создать VPN-пользователя «$rest» с полным доступом (весь трафик через дом)? QR-код с приватным ключом придёт в чат и удалится через 2 минуты." \
+                        "{\"inline_keyboard\":[[{\"text\":\"Создать\",\"callback_data\":\"vpnadd:$id\"},{\"text\":\"Отмена\",\"callback_data\":\"cancel:$id\"}]]}" ;;
+                del)
+                    [ -n "$(vpn_find "$rest")" ] || { send "Нет VPN-пользователя: $rest. Есть: $(vpn_names | tr '\n' ' ')"; return; }
+                    id=$(date +%s); echo "$rest" > "/tmp/tgbot.pend.$id"
+                    send_kb "Удалить VPN-пользователя «$rest»? Его конфиг перестанет работать." \
+                        "{\"inline_keyboard\":[[{\"text\":\"Удалить\",\"callback_data\":\"vpndel:$id\"},{\"text\":\"Отмена\",\"callback_data\":\"cancel:$id\"}]]}" ;;
+                *) send "$(vpn)" ;;
+            esac ;;
+        /watch)
+            [ -n "$args" ] || { send "Использование: /watch <устройство> [home|alive]. home: пришёл/ушёл (человек), alive: пропало на час (принтер, пылесос)"; return; }
+            t=${args%% *}; md=""; case "$args" in *" "*) md=${args#* } ;; esac
+            send "$(watch_add "$t" "$md")" ;;
+        /unwatch)   [ -n "$args" ] && send "$(watch_del "$args")" || send "Использование: /unwatch <устройство>" ;;
+        /watching)  send "$(watching)" ;;
+        /home)      send "$(who_home)" ;;
+        /scan)      [ -n "$args" ] || { send "Использование: /scan <устройство>"; return; }
+                    send "Проверяю порты, это займёт несколько секунд..."; send "$(scan_device "$args")" ;;
+        /site)
+            sub=${args%% *}; rest=""; case "$args" in *" "*) rest=${args#* } ;; esac
+            case "$sub" in
+                add) send "$(site_add "$rest")" ;;
+                del) send "$(site_del "$rest")" ;;
+                *)   send "Использование: /site add <адрес> | /site del <адрес> | /sites" ;;
+            esac ;;
+        /sites)     send "$(sites_list)" ;;
+        /speedhist) send "$(speedhist)" ;;
+        /backup)    send "Делаю бэкап..."; r=$(do_backup); [ -n "$r" ] && send "$r" ;;
+        /digest)    send "$(digest)" ;;
         /report)    send "$(report)" ;;
         /speedtest) send "Меряю скорость, это займёт около 20 секунд..."; send "$(speedtest)" ;;
         /blocked)   send "$(blocked_list)" ;;
@@ -200,7 +243,7 @@ handle() {
             send_kb "Перезагрузить роутер? Интернет пропадёт примерно на 2 минуты." \
                 '{"inline_keyboard":[[{"text":"Да, перезагрузить","callback_data":"reboot:yes"},{"text":"Отмена","callback_data":"reboot:no"}]]}' ;;
         /start|/help)
-            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/blocked — список заблокированных\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/reboot — перезагрузить роутер')" ;;
+            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN (/vpn add Имя, /vpn del Имя)\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/blocked — список заблокированных\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/watch, /unwatch, /watching — слежение за устройствами\n/home — кто дома\n/scan <устройство> — проверка открытых портов\n/site add|del, /sites — мониторинг сайтов\n/speedhist — история скорости\n/backup — зашифрованный бэкап конфигурации\n/digest — итоги недели\n/reboot — перезагрузить роутер')" ;;
         *) send "Не понял. Список команд: /help" ;;
     esac
 }
@@ -216,5 +259,12 @@ handle_cb() {
             else do_block "$m"; send "Заблокировано: $(devname "$m") ($m). Вернуть: /unblock $m"; fi ;;
         reboot:yes) send "Перезагружаюсь. Напишу, когда вернусь."; ( sleep 3; reboot ) >/dev/null 2>&1 & ;;
         reboot:no)  send "Отмена, роутер не перезагружаю." ;;
+        vpnadd:*)
+            id=${data#vpnadd:}; n=$(cat "/tmp/tgbot.pend.$id" 2>/dev/null); rm -f "/tmp/tgbot.pend.$id"
+            if vpn_name_ok "$n"; then vpn_add "$n"; else send "Запрос устарел, повторите /vpn add Имя."; fi ;;
+        vpndel:*)
+            id=${data#vpndel:}; n=$(cat "/tmp/tgbot.pend.$id" 2>/dev/null); rm -f "/tmp/tgbot.pend.$id"
+            if vpn_name_ok "$n"; then send "$(vpn_del "$n")"; else send "Запрос устарел, повторите /vpn del Имя."; fi ;;
+        cancel:*)   rm -f "/tmp/tgbot.pend.${data#cancel:}"; send "Отменено." ;;
     esac
 }

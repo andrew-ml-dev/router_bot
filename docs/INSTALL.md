@@ -75,6 +75,18 @@ querylog:
 Затем `/etc/init.d/adguardhome restart`. Без этого бот работает, но `/report` и
 уведомления об аномалиях будут пустыми.
 
+## 6. Необязательно: бэкап и VPN-адрес
+
+В `/etc/tgbot.conf` можно добавить:
+
+```
+BACKUP_PASS=длинная_случайная_фраза   # включает зашифрованный бэкап, см. BACKUP.md
+VPN_ENDPOINT=vpn.example.com          # адрес роутера для VPN-конфигов (по умолчанию берётся WAN IP)
+```
+
+Для `/vpn add` нужен пакет `qrencode` (`opkg install qrencode`, установщик делает это сам). Штатный `qrencode` не умеет PNG,
+поэтому картинку QR-кода рисует `tgbot-png.lua`.
+
 ## Обновление
 
 Скопируйте новые файлы поверх (тот же `./install.sh`, существующий `/etc/tgbot.conf` сохранится) и выполните `tgbot-ctl on`.
