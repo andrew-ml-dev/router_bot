@@ -284,6 +284,8 @@ handle_cb() {
         pz:*)     m=${data#pz:}; tg_delete "$CB_MID"; CB_MID=""; pause_dur_menu "$m" ;;
         pzm:*)    r=${data#pzm:}; m=${r%:*}; ui_done "$(pause_start "$m" "${r##*:}")" 12 ;;
         who:*)    m=${data#who:}; tg_delete "$CB_MID"; CB_MID=""; send "$(who_dev "$m")" ;;
+        haoff:*)  [ -x "$HOOKS/off" ] && ( "$HOOKS/off" >/dev/null 2>&1 & ); ui_done "✓ Выключаю свет, розетки и телевизор." ;;
+        haskip:*) ui_done "Ок, оставляю включённым." ;;
         imhome:*) echo home > "$HOUSE"; : > "$HOLD"
                   [ -x "$HOOKS/home" ] && ( "$HOOKS/home" >/dev/null 2>&1 & )
                   ui_done "✓ Принято: считаю, что дома кто-то есть." ;;
