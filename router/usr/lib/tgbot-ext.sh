@@ -57,12 +57,6 @@ watch_add() {   # устройство [home|alive]
 }
 
 # ---------- интерфейс: плитки и редактирование сообщений ----------
-tg_edit_text() {   # message_id текст [разметка]; по умолчанию кнопки убираются
-    mk=$3; [ -n "$mk" ] || mk='{"inline_keyboard":[]}'
-    curl -s -m 15 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "message_id=$1" \
-        --data-urlencode "text=$2" --data-urlencode "reply_markup=$mk" "$API/editMessageText" | grep -q '"ok":true'
-}
-
 send_kb_mid() {    # файл_для_message_id текст разметка
     r=$(curl -s -m 15 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$2" \
         --data-urlencode "reply_markup=$3" "$API/sendMessage")
@@ -76,20 +70,27 @@ json_kb() {
             | {inline_keyboard: .}'
 }
 
-# ответ на нажатие: убрать плитки у сообщения и дописать результат
-ui_done() {
-    [ -n "$CB_MID" ] || return 0
-    orig=$(cat /tmp/tgbot.cbtext 2>/dev/null)
-    tg_edit_text "$CB_MID" "$orig
+# ---- «чистый чат»: выбор сделан, сообщение с плитками удаляется, итог показывается ненадолго ----
+UI_TOAST=${UI_TOAST:-6}   # сколько секунд показывать итог (0 = не удалять)
 
-$1"
+tg_delete() {   # message_id
+    [ -n "$1" ] && [ "$1" != "-" ] || return 0
+    curl -s -m 10 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "message_id=$1" \
+        "$API/deleteMessage" >/dev/null 2>&1
 }
 
-# обновить список-плитки на месте: message_id заголовок функция_строк текст_если_пусто
-refresh_list() {
-    lines=$($3)
-    if [ -z "$lines" ]; then tg_edit_text "$1" "$4"
-    else tg_edit_text "$1" "$2" "$(printf '%s\n' "$lines" | json_kb)"; fi
+toast() {       # текст [секунд] -- краткое сообщение, которое исчезает само
+    secs=${2:-$UI_TOAST}
+    r=$(curl -s -m 15 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$1" "$API/sendMessage")
+    tmid=$(echo "$r" | jq -r '.result.message_id // empty')
+    echo "$tmid" > /tmp/tgbot.lastmid
+    if [ -n "$tmid" ] && [ "$secs" -gt 0 ]; then delete_later "$tmid" "$secs"; fi
+}
+
+ui_done() {     # итог действия: убрать сообщение с плитками и показать итог
+    [ -n "$CB_MID" ] && tg_delete "$CB_MID"
+    CB_MID=""
+    toast "$1" "$2"
 }
 
 # --- слежение: выбор устройства
@@ -113,14 +114,7 @@ watch_menu() {
     send_kb "$WATCH_TEXT" "$(printf '%s\n' "$l" | json_kb)"
 }
 watch_tap() {   # режим mac
-    res=$(watch_add "$2" "$1")
-    lines=$(watch_lines)
-    if [ -z "$lines" ]; then tg_edit_text "$CB_MID" "$res
-
-Все известные устройства под слежением. Список: /watching"
-    else tg_edit_text "$CB_MID" "$WATCH_TEXT
-
-✓ $res" "$(printf '%s\n' "$lines" | json_kb)"; fi
+    ui_done "✓ $(watch_add "$2" "$1")"
 }
 
 # --- снять слежение
@@ -150,11 +144,7 @@ block_lines() {   # активные устройства, которые ещё
 block_menu() {
     l=$(block_lines)
     if [ -z "$l" ]; then send "Нет активных устройств для блокировки."; return; fi
-    send_kb_mid /tmp/tgbot.pk.block "Какое устройство заблокировать? (потребуется подтверждение)" "$(printf '%s\n' "$l" | json_kb)"
-}
-block_picker_refresh() {
-    [ -s /tmp/tgbot.pk.block ] || return
-    refresh_list "$(cat /tmp/tgbot.pk.block)" "Какое устройство заблокировать? (потребуется подтверждение)" block_lines "Больше нет активных устройств для блокировки."
+    send_kb "Какое устройство заблокировать? (потребуется подтверждение)" "$(printf '%s\n' "$l" | json_kb)"
 }
 unblock_lines() {
     for m in $(uci -q get gl_block.block_mac.mac); do

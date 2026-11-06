@@ -1,5 +1,6 @@
 #!/bin/sh
-# Слушатель команд и кнопок Telegram (long polling): отвечает мгновенно
+# Слушатель команд и кнопок Telegram (long polling): отвечает мгновенно.
+# Принцип «чистого чата»: команда пользователя и сообщение с плитками удаляются после использования.
 . /usr/lib/tgbot-lib.sh
 OFFSET=/tmp/tgbot.offset
 
@@ -15,7 +16,7 @@ set_commands   # подсказки команд при вводе «/»
 while true; do
     upd=$(curl -s -m 65 "$API/getUpdates?offset=$off&timeout=50" 2>/dev/null)
     if [ -z "$upd" ]; then sleep 5; continue; fi
-    echo "$upd" | jq -r '.result[]? | if .callback_query then [.update_id, (.callback_query.message.chat.id|tostring), "c", (.callback_query.data // ""), .callback_query.id, (.callback_query.message.message_id|tostring)] else [.update_id, (.message.chat.id|tostring), "m", (.message.text // ""), "-", "-"] end | @tsv' > /tmp/tgbot.upd 2>/dev/null
+    echo "$upd" | jq -r '.result[]? | if .callback_query then [.update_id, (.callback_query.message.chat.id|tostring), "c", (.callback_query.data // ""), .callback_query.id, (.callback_query.message.message_id|tostring)] else [.update_id, (.message.chat.id|tostring), "m", (.message.text // ""), "-", (.message.message_id|tostring)] end | @tsv' > /tmp/tgbot.upd 2>/dev/null
     while IFS="$(printf '\t')" read id chat kind data cbid mid; do
         [ -n "$id" ] || continue
         off=$((id + 1)); echo "$off" > "$OFFSET"
@@ -29,6 +30,8 @@ while true; do
             CB_MID=""
         else
             handle "$data"
+            # «чистый чат»: сама команда пользователя после обработки удаляется
+            case "$data" in /*) tg_delete "$mid" ;; esac
         fi
     done < /tmp/tgbot.upd
     sleep 1

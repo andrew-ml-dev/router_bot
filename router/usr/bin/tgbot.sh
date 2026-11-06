@@ -51,11 +51,10 @@ awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print tolower($4), $1}' /proc/net/arp | 
     grep -qi "^$mac\$" "$KNOWN" && continue
     echo "$mac" >> "$KNOWN"
     if [ -z "$first_run" ]; then
-        send_kb "$(printf 'Новое устройство в сети\nИмя: %s\nПроизводитель: %s\nПодключение: %s\nIP: %s\nMAC: %s' \
-            "$(devname "$mac")" "$(vendor "$mac")" "$(connection "$mac")" "$ip" "$mac")" \
+        send_kb "$(printf 'Новое устройство в сети\nИмя: %s\nПроизводитель: %s\nПодключение: %s\nIP: %s\nMAC: %s\n\n%s' \
+            "$(devname "$mac")" "$(vendor "$mac")" "$(connection "$mac")" "$ip" "$mac" "$(lua /usr/bin/tgbot-scan.lua "$ip")")" \
             "{\"inline_keyboard\":[[{\"text\":\"Знаю\",\"callback_data\":\"allow:$mac\"},{\"text\":\"Заблокировать\",\"callback_data\":\"block:$mac\"}]]}"
         log_event new "$(devname "$mac") ($mac)"
-        send "$(scan_device "$mac")"
         sleep 1
     fi
 done

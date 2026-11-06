@@ -249,39 +249,38 @@ handle() {
     esac
 }
 
-# нажатия на кнопки (CB_MID: id сообщения с кнопкой; текст сообщения в /tmp/tgbot.cbtext)
+# нажатия на кнопки. CB_MID: id сообщения с плитками. Принцип «чистого чата»:
+# сообщение с плитками удаляется, итог показывается несколько секунд (UI_TOAST) и исчезает.
 handle_cb() {
     data="$1"
     case "$data" in
         allow:*)  m=${data#allow:}; ui_done "✓ Известное устройство: $(devname "$m")" ;;
         bk:*)
             m=${data#bk:}
+            tg_delete "$CB_MID"; CB_MID=""
             send_kb "Заблокировать $(devname "$m") ($m)? Устройство потеряет интернет." \
                 "{\"inline_keyboard\":[[{\"text\":\"Да, заблокировать\",\"callback_data\":\"block:$m\"},{\"text\":\"Отмена\",\"callback_data\":\"cancel:0\"}]]}" ;;
         block:*)
             m=${data#block:}
             if [ "$m" = "$(router_mac)" ]; then ui_done "Сам роутер блокировать нельзя."
-            else do_block "$m"; ui_done "✗ Заблокировано: $(devname "$m"). Вернуть: /unblock"; block_picker_refresh; fi ;;
-        ub:*)
-            m=${data#ub:}; do_unblock "$m"
-            refresh_list "$CB_MID" "Кого разблокировать?" unblock_lines "Готово: заблокированных устройств больше нет. Разблокировано: $(devname "$m")" ;;
-        uw:*)
-            m=${data#uw:}; res=$(watch_del "$m")
-            refresh_list "$CB_MID" "Что убрать из слежения?" unwatch_lines "$res. Больше ни за чем не слежу." ;;
+            else do_block "$m"; ui_done "✗ Заблокировано: $(devname "$m"). Вернуть: /unblock"; fi ;;
+        ub:*)     m=${data#ub:}; do_unblock "$m"; ui_done "✓ Разблокировано: $(devname "$m")" ;;
+        uw:*)     m=${data#uw:}; ui_done "✓ $(watch_del "$m")" ;;
         w:home:*|w:alive:*)
             md=${data#w:}; md=${md%%:*}; m=${data#w:$md:}
             watch_tap "$md" "$m" ;;
-        reboot:yes) ui_done "✓ Перезагружаюсь, напишу, когда вернусь."; ( sleep 3; reboot ) >/dev/null 2>&1 & ;;
+        reboot:yes) ui_done "✓ Перезагружаюсь, напишу, когда вернусь." 10; ( sleep 3; reboot ) >/dev/null 2>&1 & ;;
         reboot:no)  ui_done "Отмена, роутер не перезагружаю." ;;
         vpnadd:*)
             id=${data#vpnadd:}; n=$(cat "/tmp/tgbot.pend.$id" 2>/dev/null); rm -f "/tmp/tgbot.pend.$id"
+            tg_delete "$CB_MID"; CB_MID=""
             if vpn_name_ok "$n"; then
-                if vpn_add "$n"; then ui_done "✓ VPN-пользователь $n создан: QR и конфиг выше (удалятся через 2 минуты)."
-                else ui_done "✗ Не удалось создать $n."; fi
-            else ui_done "Запрос устарел, повторите /vpn add Имя."; fi ;;
+                if vpn_add "$n"; then toast "✓ VPN-пользователь $n создан: QR и конфиг выше (удалятся через 2 минуты)." 15
+                else toast "✗ Не удалось создать $n."; fi
+            else toast "Запрос устарел, повторите /vpn add Имя."; fi ;;
         vpndel:*)
             id=${data#vpndel:}; n=$(cat "/tmp/tgbot.pend.$id" 2>/dev/null); rm -f "/tmp/tgbot.pend.$id"
-            if vpn_name_ok "$n"; then r=$(vpn_del "$n"); ui_done "✓ $r"; else ui_done "Запрос устарел, повторите /vpn del Имя."; fi ;;
+            if vpn_name_ok "$n"; then ui_done "✓ $(vpn_del "$n")"; else ui_done "Запрос устарел, повторите /vpn del Имя."; fi ;;
         cancel:*)   rm -f "/tmp/tgbot.pend.${data#cancel:}"; ui_done "Отменено." ;;
         cmd:*)      handle "/${data#cmd:}" ;;
     esac
