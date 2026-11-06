@@ -1,0 +1,220 @@
+#!/bin/sh
+# Общая библиотека Telegram-бота для роутера
+. /etc/tgbot.conf
+API="https://api.telegram.org/bot$TOKEN"
+NAMES=/etc/tgbot.names          # свои имена устройств: mac=Имя
+QLOG=/etc/AdGuardHome/data/querylog.json
+
+# ---------- отправка ----------
+send() {
+    curl -s -m 15 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$1" \
+        "$API/sendMessage" | grep -q '"ok":true'
+}
+
+# send_kb "текст" '{"inline_keyboard":[...]}'
+send_kb() {
+    curl -s -m 15 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$1" \
+        --data-urlencode "reply_markup=$2" "$API/sendMessage" | grep -q '"ok":true'
+}
+
+answer_cb() {
+    curl -s -m 10 --data-urlencode "callback_query_id=$1" "$API/answerCallbackQuery" >/dev/null 2>&1
+}
+
+# ---------- имена и адреса ----------
+lc() { echo "$1" | tr 'A-Z' 'a-z'; }
+
+devname() {   # MAC -> имя
+    m=$(lc "$1")
+    n=$(grep -i "^$m=" "$NAMES" 2>/dev/null | head -n1 | cut -d= -f2-)
+    [ -z "$n" ] && n=$(awk -v m="$m" 'tolower($2)==m && $4!="*" {print $4; exit}' /tmp/dhcp.leases 2>/dev/null)
+    echo "${n:-безымянное}"
+}
+
+ip2mac() { awk -v ip="$1" '$1==ip {print tolower($4); exit}' /proc/net/arp; }
+mac2ip() { awk -v m="$(lc "$1")" 'tolower($4)==m {print $1; exit}' /proc/net/arp; }
+
+ipname() {    # IP -> имя (или сам IP)
+    m=$(ip2mac "$1")
+    if [ -n "$m" ]; then echo "$(devname "$m")"; else echo "$1"; fi
+}
+
+target_mac() {   # IP | MAC | часть имени -> MAC
+    a=$(lc "$1")
+    case "$a" in
+        *:*:*:*:*:*) echo "$a" ;;
+        *.*.*.*)     ip2mac "$a" ;;
+        *)
+            m=$(awk -F= -v n="$a" 'index(tolower($2), n) {print tolower($1); exit}' "$NAMES" 2>/dev/null)
+            [ -z "$m" ] && m=$(awk -v n="$a" '$4!="*" && index(tolower($4), n) {print tolower($2); exit}' /tmp/dhcp.leases 2>/dev/null)
+            echo "$m" ;;
+    esac
+}
+
+router_mac() { cat /sys/class/net/br-lan/address 2>/dev/null | tr 'A-Z' 'a-z'; }
+
+is_blocked() { ipset test GL_MAC_BLOCK "$1" >/dev/null 2>&1; }
+
+# ---------- блокировка (нативный механизм GL.iNet, виден в админке) ----------
+do_block() {
+    m=$(echo "$1" | tr 'a-z' 'A-Z')
+    uci -q get gl_block.block_mac >/dev/null || uci set gl_block.block_mac=block_mac
+    uci -q get gl_block.block_mac.mac | grep -qi "$m" || uci add_list gl_block.block_mac.mac="$m"
+    uci commit gl_block
+    ipset create GL_MAC_BLOCK hash:mac 2>/dev/null
+    ipset add GL_MAC_BLOCK "$m" -exist 2>/dev/null
+    ip=$(mac2ip "$m"); [ -n "$ip" ] && conntrack -D -s "$ip" >/dev/null 2>&1
+}
+
+do_unblock() {
+    m=$(echo "$1" | tr 'a-z' 'A-Z'); l=$(lc "$1")
+    uci -q del_list gl_block.block_mac.mac="$m"
+    uci -q del_list gl_block.block_mac.mac="$l"
+    uci commit gl_block
+    ipset del GL_MAC_BLOCK "$m" 2>/dev/null
+}
+
+# ---------- информация ----------
+clients() {
+    awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print $1, $4}' /proc/net/arp | while read ip mac; do
+        flag=""; is_blocked "$mac" && flag="  [ЗАБЛОКИРОВАНО]"
+        echo "$ip  $(devname "$mac")  ($mac)$flag"
+    done
+}
+
+status() {
+    up=$(awk '{d=int($1/86400); h=int(($1%86400)/3600); m=int(($1%3600)/60); printf "%dд %dч %dм", d, h, m}' /proc/uptime)
+    load=$(cut -d' ' -f1-3 /proc/loadavg)
+    mem=$(free -m | awk '/Mem:/ {printf "%d/%d МБ", $3, $2}')
+    t=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
+    [ -n "$t" ] && t="$((t/1000)) °C" || t="?"
+    wan=$(ubus call network.interface.wan status 2>/dev/null | jq -r '.["ipv4-address"][0].address // "нет"' 2>/dev/null)
+    n=$(clients | wc -l)
+    printf 'Роутер GL-MT6000\nАптайм: %s\nНагрузка: %s\nПамять: %s\nТемпература: %s\nWAN IP: %s\nУстройств в сети: %s' \
+        "$up" "$load" "$mem" "$t" "$wan" "$n"
+}
+
+vpn() {
+    now=$(date +%s)
+    out=""
+    for sec in $(uci -q show wireguard_server | grep -o 'peer_[0-9]*=peers' | cut -d= -f1); do
+        name=$(uci -q get wireguard_server.$sec.name)
+        pub=$(uci -q get wireguard_server.$sec.public_key)
+        hs=$(wg show wgserver latest-handshakes 2>/dev/null | grep "^$pub" | cut -f2)
+        if [ -z "$hs" ] || [ "$hs" = "0" ]; then
+            st="не подключался"
+        else
+            age=$((now - hs))
+            if [ $age -lt 240 ]; then st="онлайн"; else st="был $((age/60)) мин назад"; fi
+        fi
+        out="$out$name: $st
+"
+    done
+    printf 'WireGuard:\n%s' "$out"
+}
+
+named_top() {   # stdin: "N IP" -> "  Имя (N)"
+    while read c ip; do
+        [ -n "$ip" ] && echo "  $(ipname "$ip") ($c)"
+    done
+}
+
+report() {
+    if [ ! -s "$QLOG" ]; then
+        echo "Журнал запросов AdGuard пока пуст."
+        return
+    fi
+    cutoff=$(date -u -d "@$(( $(date +%s) - 86400 ))" +%Y-%m-%dT%H:%M 2>/dev/null)
+    tmp=/tmp/tgbot.ql
+    jq -c --arg c "$cutoff" 'select(.T > $c)' "$QLOG" 2>/dev/null > "$tmp"
+    total=$(wc -l < "$tmp")
+    blocked=$(jq -c 'select(.Result.IsFiltered==true)' "$tmp" 2>/dev/null | wc -l)
+    pct=0; [ "$total" -gt 0 ] && pct=$((blocked * 100 / total))
+    topb=$(jq -r 'select(.Result.IsFiltered==true) | .QH' "$tmp" 2>/dev/null | sort | uniq -c | sort -rn | head -5 | awk '{print "  "$2" ("$1")"}')
+    topc=$(jq -r '.IP' "$tmp" 2>/dev/null | sort | uniq -c | sort -rn | head -5 | named_top)
+    rm -f "$tmp"
+    printf 'DNS за 24 часа\nЗапросов: %s\nЗаблокировано: %s (%s%%)\n\nТоп заблокированных:\n%s\n\nТоп устройств по запросам:\n%s' \
+        "$total" "$blocked" "$pct" "$topb" "$topc"
+}
+
+# ---------- действия ----------
+wake() {
+    m=$(target_mac "$1")
+    [ -n "$m" ] || { echo "Не нашёл устройство: $1"; return; }
+    lua /usr/bin/tgbot-wol.lua "$m" 2>&1 && echo "Отправил Wake-on-LAN для $(devname "$m") ($m)"
+}
+
+speedtest() {
+    dl=$(curl -s -m 30 -o /dev/null -w '%{speed_download}' "https://speed.cloudflare.com/__down?bytes=50000000" 2>/dev/null)
+    ul=$(head -c 20000000 /dev/zero | curl -s -m 30 -o /dev/null -w '%{speed_upload}' --data-binary @- "https://speed.cloudflare.com/__up" 2>/dev/null)
+    png=$(ping -c4 -W2 1.1.1.1 2>/dev/null | awk -F'/' '/^round-trip|^rtt/ {printf "%.0f", $4}')
+    awk -v d="${dl:-0}" -v u="${ul:-0}" -v p="${png:-?}" 'BEGIN {printf "Скорость (Cloudflare)\nЗагрузка: %.0f Мбит/с\nОтдача: %.0f Мбит/с\nПинг: %s мс", d*8/1000000, u*8/1000000, p}'
+}
+
+blocked_list() {
+    l=$(uci -q get gl_block.block_mac.mac)
+    if [ -z "$l" ]; then echo "Заблокированных устройств нет."; return; fi
+    echo "Заблокировано:"
+    for m in $l; do echo "  $(devname "$m")  ($m)"; done
+}
+
+set_name() {   # $1 = mac, $2.. = имя
+    m=$(lc "$1"); shift
+    [ -f "$NAMES" ] && sed -i "/^$m=/d" "$NAMES"
+    echo "$m=$*" >> "$NAMES"
+}
+
+# ---------- обработка команд ----------
+handle() {
+    text="$1"
+    cmd=${text%% *}
+    args=""; case "$text" in *" "*) args=${text#* } ;; esac
+    case "$cmd" in
+        /status)    send "$(status)" ;;
+        /clients)   send "$(printf 'Устройства в сети:\n%s' "$(clients)")" ;;
+        /vpn)       send "$(vpn)" ;;
+        /report)    send "$(report)" ;;
+        /speedtest) send "Меряю скорость, это займёт около 20 секунд..."; send "$(speedtest)" ;;
+        /blocked)   send "$(blocked_list)" ;;
+        /block)
+            [ -n "$args" ] || { send "Использование: /block <IP | MAC | имя>"; return; }
+            m=$(target_mac "$args")
+            if [ -z "$m" ]; then send "Не нашёл устройство: $args"
+            elif [ "$m" = "$(router_mac)" ]; then send "Сам роутер блокировать нельзя."
+            else do_block "$m"; send "Заблокировано: $(devname "$m") ($m). Вернуть: /unblock $(devname "$m")"; fi ;;
+        /unblock)
+            [ -n "$args" ] || { send "Использование: /unblock <IP | MAC | имя>"; return; }
+            m=$(target_mac "$args")
+            if [ -z "$m" ]; then send "Не нашёл устройство: $args"
+            else do_unblock "$m"; send "Разблокировано: $(devname "$m") ($m)"; fi ;;
+        /wake)
+            [ -n "$args" ] || { send "Использование: /wake <IP | MAC | имя>"; return; }
+            send "$(wake "$args")" ;;
+        /name)
+            t=${args%% *}; nm=""; case "$args" in *" "*) nm=${args#* } ;; esac
+            m=$(target_mac "$t")
+            if [ -z "$t" ] || [ -z "$nm" ]; then send "Использование: /name <IP | MAC | имя> <новое имя>"
+            elif [ -z "$m" ]; then send "Не нашёл устройство: $t"
+            else set_name "$m" "$nm"; send "Теперь $m называется: $nm"; fi ;;
+        /reboot)
+            send_kb "Перезагрузить роутер? Интернет пропадёт примерно на 2 минуты." \
+                '{"inline_keyboard":[[{"text":"Да, перезагрузить","callback_data":"reboot:yes"},{"text":"Отмена","callback_data":"reboot:no"}]]}' ;;
+        /start|/help)
+            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/blocked — список заблокированных\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/reboot — перезагрузить роутер')" ;;
+        *) send "Не понял. Список команд: /help" ;;
+    esac
+}
+
+# нажатия на кнопки
+handle_cb() {
+    data="$1"
+    case "$data" in
+        allow:*)  m=${data#allow:}; send "Ок, оставляем: $(devname "$m") ($m)" ;;
+        block:*)
+            m=${data#block:}
+            if [ "$m" = "$(router_mac)" ]; then send "Сам роутер блокировать нельзя."
+            else do_block "$m"; send "Заблокировано: $(devname "$m") ($m). Вернуть: /unblock $m"; fi ;;
+        reboot:yes) send "Перезагружаюсь. Напишу, когда вернусь."; ( sleep 3; reboot ) >/dev/null 2>&1 & ;;
+        reboot:no)  send "Отмена, роутер не перезагружаю." ;;
+    esac
+}

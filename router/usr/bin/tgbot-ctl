@@ -1,0 +1,51 @@
+#!/bin/sh
+# Управление Telegram-ботом: tgbot-ctl on | off | status | remove [--purge]
+CRON=/etc/crontabs/root
+LINE='* * * * * /usr/bin/tgbot.sh >>/tmp/tgbot.cron.log 2>&1'
+
+running() { ps | grep -q '[t]gbot-poll'; }
+cron_on()  { grep -q 'tgbot.sh' "$CRON" 2>/dev/null; }
+
+case "$1" in
+    off)
+        /etc/init.d/tgbot stop >/dev/null 2>&1
+        /etc/init.d/tgbot disable >/dev/null 2>&1
+        sed -i '/tgbot.sh/d' "$CRON" 2>/dev/null
+        /etc/init.d/cron restart >/dev/null 2>&1
+        rm -rf /tmp/tgbot.lock
+        echo "Бот выключен: слушатель остановлен, cron-проверки убраны, автозапуск отключён."
+        echo "Файлы и настройки сохранены. Включить обратно: tgbot-ctl on"
+        ;;
+    on)
+        [ -f /etc/tgbot.conf ] || { echo "Нет /etc/tgbot.conf (токен и chat_id)."; exit 1; }
+        /etc/init.d/tgbot enable >/dev/null 2>&1
+        /etc/init.d/tgbot restart >/dev/null 2>&1
+        cron_on || echo "$LINE" >> "$CRON"
+        /etc/init.d/cron restart >/dev/null 2>&1
+        echo "Бот включён."
+        ;;
+    status)
+        running && echo "Слушатель команд: работает" || echo "Слушатель команд: остановлен"
+        cron_on && echo "Периодические проверки (cron): включены" || echo "Периодические проверки (cron): выключены"
+        [ -e /etc/rc.d/S99tgbot ] && echo "Автозапуск: включён" || echo "Автозапуск: выключен"
+        ;;
+    remove)
+        "$0" off
+        rm -f /usr/bin/tgbot.sh /usr/bin/tgbot-poll.sh /usr/bin/tgbot-wol.lua /usr/lib/tgbot-lib.sh /etc/init.d/tgbot
+        rm -f /tmp/tgbot.* 2>/dev/null
+        if [ "$2" = "--purge" ]; then
+            rm -f /etc/tgbot.conf /etc/tgbot.known /etc/tgbot.names
+            rm -rf /root/tgbot-backup
+            echo "Бот удалён полностью, токен и данные стёрты."
+        else
+            echo "Бот удалён. Токен и данные сохранены (/etc/tgbot.conf, tgbot.known, tgbot.names)."
+            echo "Чтобы стереть и их, выполните: rm /etc/tgbot.conf /etc/tgbot.known /etc/tgbot.names"
+            echo "(в следующий раз используйте: tgbot-ctl remove --purge)"
+        fi
+        echo "Не забудьте отозвать токен в Telegram: @BotFather -> /revoke"
+        rm -f /usr/bin/tgbot-ctl
+        ;;
+    *)
+        echo "Использование: tgbot-ctl on | off | status | remove [--purge]"
+        ;;
+esac

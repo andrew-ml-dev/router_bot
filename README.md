@@ -1,0 +1,81 @@
+# flint2-telegram-bot
+
+Лёгкий Telegram-бот для роутеров **GL.iNet Flint 2 (GL-MT6000)** и других устройств на **OpenWrt / GL.iNet 4.x**.
+Работает прямо на роутере, написан на `sh` + `curl` + `jq`, занимает около **25 КБ** и почти не нагружает процессор.
+
+> English: a tiny shell-only Telegram bot that runs on a GL.iNet/OpenWrt router. It sends alerts
+> (new devices, VPN events, internet outages, DNS anomalies, hardware warnings) and answers commands
+> (`/status`, `/clients`, `/block`, `/wake`, `/speedtest`, `/reboot`, ...). Docs are in Russian.
+
+## Возможности
+
+**Уведомления**
+- Роутер загрузился (со статусом).
+- **Новое устройство в сети**: имя, производитель по MAC, Wi-Fi (диапазон, сеть, сигнал) или кабель, кнопки **«Знаю» / «Заблокировать»**.
+- **WireGuard**: клиент подключился или отключился.
+- **Интернет** пропал и вернулся (с длительностью).
+- **Всплески DNS-запросов** и много заблокированных запросов (по журналу AdGuard Home).
+- Перебор паролей по SSH.
+- Перегрев, нехватка памяти, заполнение диска.
+- Утренний отчёт в 09:00.
+
+**Команды** (ответ мгновенный, бот отвечает только вашему `chat_id`)
+
+| Команда | Действие |
+|---|---|
+| `/status` | аптайм, нагрузка, память, температура, WAN IP, число устройств |
+| `/clients` | кто в сети (с именами, помечает заблокированных) |
+| `/vpn` | кто подключён по WireGuard |
+| `/report` | DNS за 24 часа: запросы, блокировки, топы |
+| `/speedtest` | скорость и пинг (через Cloudflare) |
+| `/block`, `/unblock`, `/blocked` | блокировка устройств (по IP, MAC или имени) |
+| `/wake <устройство>` | Wake-on-LAN |
+| `/name <устройство> <имя>` | задать своё имя устройству |
+| `/reboot` | перезагрузка с кнопкой подтверждения |
+
+Подробнее: [docs/COMMANDS.md](docs/COMMANDS.md).
+
+## Быстрый старт
+
+1. Создайте бота у [@BotFather](https://t.me/BotFather) (`/newbot`) и сохраните токен.
+2. Настройте SSH-доступ к роутеру по ключу: `ssh-copy-id root@192.168.8.1`.
+3. На компьютере выполните:
+
+```sh
+git clone <адрес этого репозитория>
+cd flint2-telegram-bot
+./install.sh root@192.168.8.1
+```
+
+Скрипт скопирует файлы, спросит токен, сам определит ваш `chat_id` и запустит бота.
+Подробная инструкция и ручная установка: [docs/INSTALL.md](docs/INSTALL.md).
+
+## Управление
+
+На роутере (по SSH):
+
+```
+tgbot-ctl status           # что работает
+tgbot-ctl off              # полностью выключить (остановка, без автозапуска)
+tgbot-ctl on               # включить
+tgbot-ctl remove [--purge] # удалить бота (--purge: вместе с токеном и данными)
+```
+
+## Документация
+
+- [Установка](docs/INSTALL.md)
+- [Команды и уведомления](docs/COMMANDS.md)
+- [Как это устроено](docs/ARCHITECTURE.md)
+- [Настройка роутера: AdGuard Home, WireGuard, безопасность](docs/ROUTER-SETUP.md)
+- [Безопасность бота](docs/SECURITY.md)
+- [Решение проблем](docs/TROUBLESHOOTING.md)
+
+## Требования
+
+- GL.iNet Flint 2 (GL-MT6000) с прошивкой 4.x или другой роутер на OpenWrt 21.02+ (часть функций, например блокировка через `gl_block` и Wi-Fi-имена интерфейсов `ra0/rax0`, специфична для GL.iNet / MediaTek, см. ARCHITECTURE).
+- На роутере: `curl`, `jq`, `lua` (на GL.iNet 4.x есть из коробки), cron.
+- Для отчётов и аномалий: AdGuard Home с включённым журналом запросов в файл.
+
+## Лицензия
+
+MIT, см. [LICENSE](LICENSE).

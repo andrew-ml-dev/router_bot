@@ -1,0 +1,17 @@
+# Секреты и данные роутера: никогда не коммитить
+tgbot.conf
+*.conf
+!router/etc/tgbot.conf.example
+tgbot.known
+tgbot.names
+*.key
+*.pem
+
+# QR-коды и конфиги VPN-клиентов (содержат приватные ключи)
+*-qr.png
+me-*.conf
+
+# Служебное
+.DS_Store
+*.bak
+*.swp
