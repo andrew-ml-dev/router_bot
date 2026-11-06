@@ -620,6 +620,7 @@ flush_outbox() {
 # ---------- состояние дома: «кто-то дома» / «никого нет» ----------
 HOOKS=/etc/tgbot.hooks       # исполняемые файлы away и home: вызываются при смене состояния
 HOUSE=/tmp/tgbot.house
+HOLD=/tmp/tgbot.hold
 house_tick() {   # cron: учитывает только устройства в режиме home; пока состояние неясно, молчит
     [ -s "$WATCH" ] || return
     hp=0; hh=0; hu=0
@@ -632,10 +633,12 @@ house_tick() {   # cron: учитывает только устройства в
     [ "$hp" = 1 ] && [ "$hu" = 0 ] || return
     hnew=home; [ "$hh" = 0 ] && hnew=empty
     hprev=$(cat "$HOUSE" 2>/dev/null)
+    if [ "$hnew" = home ]; then rm -f "$HOLD"; elif [ -e "$HOLD" ]; then return; fi   # «Это я»: не считать пустым, пока Wi-Fi не вернётся
     echo "$hnew" > "$HOUSE"
     [ -n "$hprev" ] && [ "$hprev" != "$hnew" ] || return
-    if [ "$hnew" = empty ]; then hk=away; qsend "🏠 Дома никого. Запускаю сценарий «ушли»."
-    else hk=home; qsend "🏠 Кто-то дома. Запускаю сценарий «пришли»."; fi
+    if [ "$hnew" = empty ]; then hk=away; else hk=home; fi
     log_event house "$hk"
-    [ -x "$HOOKS/$hk" ] && ( "$HOOKS/$hk" >/dev/null 2>&1 & )
+    if [ -x "$HOOKS/$hk" ]; then ( "$HOOKS/$hk" >/dev/null 2>&1 & )      # решает и пишет Home Assistant
+    elif [ "$hk" = away ]; then qsend "🏠 Из Wi-Fi пропали все, кто в режиме «Дом»."
+    else qsend "🏠 В Wi-Fi вернулся кто-то из режима «Дом»."; fi
 }
