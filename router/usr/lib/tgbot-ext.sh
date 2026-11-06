@@ -166,6 +166,7 @@ menu_panel() {
         "Скорость	cmd:speedtest	Отчёт DNS	cmd:report" \
         "Слежение	cmd:watch	Пауза	cmd:pause" \
         "Сайты	cmd:sites	История скорости	cmd:speedhist" \
+        "Что открывают	cmd:who	Блокировка	cmd:block" \
         "Помощь	cmd:help	Итоги недели	cmd:digest" | json_kb)"
 }
 
