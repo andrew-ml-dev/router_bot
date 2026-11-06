@@ -56,6 +56,34 @@ watch_add() {   # устройство [home|alive]
     echo "Слежу за $(devname "$m") ($m), режим: $mode"
 }
 
+# устройства, которые можно добавить в слежение: сначала активные, потом известные DHCP
+watch_candidates() {   # печатает строки "подпись<TAB>mac"
+    rmac=$(router_mac)
+    { awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print tolower($4)}' /proc/net/arp
+      awk '{print tolower($2)}' /tmp/dhcp.leases 2>/dev/null; } | awk 'NF && !seen[$0]++' | while read -r m; do
+        [ "$m" = "$rmac" ] && continue
+        grep -qi "^$m=" "$WATCH" 2>/dev/null && continue
+        n=$(devname "$m"); ip=$(mac2ip "$m")
+        if [ "$n" = "безымянное" ]; then n="безымянное (.${ip##*.})"; [ -z "$ip" ] && n="безымянное ($m)"; fi
+        printf '%s\t%s\n' "$n" "$m"
+    done | head -30
+}
+
+watch_menu() {   # отправляет список с кнопками
+    c=$(watch_candidates)
+    if [ -z "$c" ]; then
+        send "Все известные устройства уже под слежением. Список: /watching"
+        return
+    fi
+    kb=$(printf '%s\n' "$c" | jq -Rn '[inputs | split("\t") | {n: .[0], m: .[1]}]
+        | {inline_keyboard: [ .[] | [ {text: ("Дом: " + .n), callback_data: ("w:home:" + .m)},
+                                      {text: ("Живое: " + .n), callback_data: ("w:alive:" + .m)} ] ]}')
+    send_kb "Выберите устройство для слежения.
+Дом: человек (уведомлю, когда придёт и уйдёт)
+Живое: принтер, пылесос и т.п. (уведомлю, если пропадёт больше чем на час)
+Добавлено сейчас: $(grep -c . "$WATCH" 2>/dev/null || echo 0)" "$kb"
+}
+
 watch_del() {
     m=$(target_mac "$1")
     [ -n "$m" ] || { echo "Не нашёл устройство: $1"; return; }

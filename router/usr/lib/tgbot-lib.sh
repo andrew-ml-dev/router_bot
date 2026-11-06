@@ -197,7 +197,7 @@ handle() {
                 *) send "$(vpn)" ;;
             esac ;;
         /watch)
-            [ -n "$args" ] || { send "Использование: /watch <устройство> [home|alive]. home: пришёл/ушёл (человек), alive: пропало на час (принтер, пылесос)"; return; }
+            [ -n "$args" ] || { watch_menu; return; }
             t=${args%% *}; md=""; case "$args" in *" "*) md=${args#* } ;; esac
             send "$(watch_add "$t" "$md")" ;;
         /unwatch)   [ -n "$args" ] && send "$(watch_del "$args")" || send "Использование: /unwatch <устройство>" ;;
@@ -243,7 +243,7 @@ handle() {
             send_kb "Перезагрузить роутер? Интернет пропадёт примерно на 2 минуты." \
                 '{"inline_keyboard":[[{"text":"Да, перезагрузить","callback_data":"reboot:yes"},{"text":"Отмена","callback_data":"reboot:no"}]]}' ;;
         /start|/help)
-            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN (/vpn add Имя, /vpn del Имя)\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/blocked — список заблокированных\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/watch, /unwatch, /watching — слежение за устройствами\n/home — кто дома\n/scan <устройство> — проверка открытых портов\n/site add|del, /sites — мониторинг сайтов\n/speedhist — история скорости\n/backup — зашифрованный бэкап конфигурации\n/digest — итоги недели\n/reboot — перезагрузить роутер')" ;;
+            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN (/vpn add Имя, /vpn del Имя)\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/blocked — список заблокированных\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/watch — выбрать устройство для слежения (или /watch <устройство> home|alive), /unwatch, /watching\n/home — кто дома\n/scan <устройство> — проверка открытых портов\n/site add|del, /sites — мониторинг сайтов\n/speedhist — история скорости\n/backup — зашифрованный бэкап конфигурации\n/digest — итоги недели\n/reboot — перезагрузить роутер')" ;;
         *) send "Не понял. Список команд: /help" ;;
     esac
 }
@@ -265,6 +265,9 @@ handle_cb() {
         vpndel:*)
             id=${data#vpndel:}; n=$(cat "/tmp/tgbot.pend.$id" 2>/dev/null); rm -f "/tmp/tgbot.pend.$id"
             if vpn_name_ok "$n"; then send "$(vpn_del "$n")"; else send "Запрос устарел, повторите /vpn del Имя."; fi ;;
+        w:home:*|w:alive:*)
+            md=${data#w:}; md=${md%%:*}; m=${data#w:$md:}
+            send "$(watch_add "$m" "$md")" ;;
         cancel:*)   rm -f "/tmp/tgbot.pend.${data#cancel:}"; send "Отменено." ;;
     esac
 }
