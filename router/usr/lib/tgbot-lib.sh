@@ -72,6 +72,7 @@ do_unblock() {
     uci -q del_list gl_block.block_mac.mac="$l"
     uci commit gl_block
     ipset del GL_MAC_BLOCK "$m" 2>/dev/null
+    [ -f "$PAUSE" ] && sed -i "/^$l=/d" "$PAUSE"
 }
 
 # ---------- информация ----------
@@ -158,13 +159,6 @@ speedtest() {
     printf 'Скорость (Cloudflare)\nЗагрузка: %s Мбит/с\nОтдача: %s Мбит/с\nПинг: %s мс' "$1" "$2" "$3"
 }
 
-blocked_list() {
-    l=$(uci -q get gl_block.block_mac.mac)
-    if [ -z "$l" ]; then echo "Заблокированных устройств нет."; return; fi
-    echo "Заблокировано:"
-    for m in $l; do echo "  $(devname "$m")  ($m)"; done
-}
-
 set_name() {   # $1 = mac, $2.. = имя
     m=$(lc "$1"); shift
     [ -f "$NAMES" ] && sed -i "/^$m=/d" "$NAMES"
@@ -202,7 +196,14 @@ handle() {
             send "$(watch_add "$t" "$md")" ;;
         /unwatch)   if [ -n "$args" ]; then send "$(watch_del "$args")"; else unwatch_menu; fi ;;
         /menu)      menu_panel ;;
-        /watching)  send "$(watching)" ;;
+        /pause)
+            [ -n "$args" ] || { pause_menu; return; }
+            t=${args%% *}; pmin=""; case "$args" in *" "*) pmin=${args#* } ;; esac
+            pm=$(target_mac "$t")
+            if [ -z "$pm" ]; then send "Не нашёл устройство: $t"; else send "$(pause_start "$pm" "$pmin")"; fi ;;
+        /who)
+            if [ -n "$args" ]; then send "$(who_dev "$args")"
+            else send_kb "Чьи запросы показать?" "$(who_lines | json_kb)"; fi ;;
         /home)      send "$(who_home)" ;;
         /scan)      [ -n "$args" ] || { send "Использование: /scan <устройство>"; return; }
                     send "Проверяю порты, это займёт несколько секунд..."; send "$(scan_device "$args")" ;;
@@ -219,7 +220,6 @@ handle() {
         /digest)    send "$(digest)" ;;
         /report)    send "$(report)" ;;
         /speedtest) send "Меряю скорость, это займёт около 20 секунд..."; send "$(speedtest)" ;;
-        /blocked)   send "$(blocked_list)" ;;
         /block)
             [ -n "$args" ] || { block_menu; return; }
             m=$(target_mac "$args")
@@ -244,7 +244,7 @@ handle() {
             send_kb "Перезагрузить роутер? Интернет пропадёт примерно на 2 минуты." \
                 '{"inline_keyboard":[[{"text":"Да, перезагрузить","callback_data":"reboot:yes"},{"text":"Отмена","callback_data":"reboot:no"}]]}' ;;
         /start|/help)
-            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN (/vpn add Имя, /vpn del Имя)\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/blocked — список заблокированных\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/menu — панель кнопок\n/watch — выбрать устройство для слежения (или /watch <устройство> home|alive), /unwatch\n/home — кто дома\n/scan <устройство> — проверка открытых портов\n/site add|del, /sites — мониторинг сайтов\n/speedhist — история скорости\n/backup — зашифрованный бэкап конфигурации\n/digest — итоги недели\n/reboot — перезагрузить роутер')" ;;
+            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN (/vpn add Имя, /vpn del Имя)\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/pause <устройство> [минут] — интернет на паузу\n/who <устройство> — какие сайты открывает\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/menu — панель кнопок\n/watch — выбрать устройство для слежения (или /watch <устройство> home|alive), /unwatch\n/home — кто дома\n/scan <устройство> — проверка открытых портов\n/site add|del, /sites — мониторинг сайтов\n/speedhist — история скорости\n/backup — зашифрованный бэкап конфигурации\n/digest — итоги недели\n/reboot — перезагрузить роутер')" ;;
         *) send "Не понял. Список команд: /help" ;;
     esac
 }
@@ -281,6 +281,9 @@ handle_cb() {
         vpndel:*)
             id=${data#vpndel:}; n=$(cat "/tmp/tgbot.pend.$id" 2>/dev/null); rm -f "/tmp/tgbot.pend.$id"
             if vpn_name_ok "$n"; then ui_done "✓ $(vpn_del "$n")"; else ui_done "Запрос устарел, повторите /vpn del Имя."; fi ;;
+        pz:*)     m=${data#pz:}; tg_delete "$CB_MID"; CB_MID=""; pause_dur_menu "$m" ;;
+        pzm:*)    r=${data#pzm:}; m=${r%:*}; ui_done "$(pause_start "$m" "${r##*:}")" 12 ;;
+        who:*)    m=${data#who:}; tg_delete "$CB_MID"; CB_MID=""; send "$(who_dev "$m")" ;;
         cancel:*)   rm -f "/tmp/tgbot.pend.${data#cancel:}"; ui_done "Отменено." ;;
         cmd:*)      handle "/${data#cmd:}" ;;
     esac

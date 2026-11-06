@@ -10,6 +10,7 @@ EVENTS=/etc/tgbot.events      # epoch|тип|текст
 TRAFFIC=/etc/tgbot.traffic    # epoch,rx,tx (суточные снимки счётчиков WAN)
 export BACKUP_PASS
 
+PAUSE=/etc/tgbot.pause        # mac=epoch_конца (пауза интернета)
 HOME_LEAVE_MIN=6              # минут без сигнала, чтобы считать «ушёл»
 ALIVE_DOWN_MIN=60             # минут без сигнала у «живых» устройств до тревоги
 
@@ -110,7 +111,7 @@ WATCH_TEXT="Выберите устройство для слежения.
 Живое: принтер, пылесос и т.п. (уведомлю, если пропадёт больше чем на час)"
 watch_menu() {
     l=$(watch_lines)
-    if [ -z "$l" ]; then send "Все известные устройства уже под слежением. Список: /watching"; return; fi
+    if [ -z "$l" ]; then send "Все известные устройства уже под слежением. Список: /home"; return; fi
     send_kb "$WATCH_TEXT" "$(printf '%s\n' "$l" | json_kb)"
 }
 watch_tap() {   # режим mac
@@ -163,7 +164,7 @@ menu_panel() {
         "Статус	cmd:status	Кто в сети	cmd:clients" \
         "Кто дома	cmd:home	VPN	cmd:vpn" \
         "Скорость	cmd:speedtest	Отчёт DNS	cmd:report" \
-        "Слежение	cmd:watch	Заблокированные	cmd:blocked" \
+        "Слежение	cmd:watch	Пауза	cmd:pause" \
         "Сайты	cmd:sites	История скорости	cmd:speedhist" \
         "Помощь	cmd:help	Итоги недели	cmd:digest" | json_kb)"
 }
@@ -182,7 +183,8 @@ set_commands() {
 {"command":"unwatch","description":"Убрать устройство из слежения"},
 {"command":"block","description":"Заблокировать устройство"},
 {"command":"unblock","description":"Разблокировать устройство"},
-{"command":"blocked","description":"Список заблокированных"},
+{"command":"pause","description":"Интернет устройству на паузу"},
+{"command":"who","description":"Какие сайты открывает устройство"},
 {"command":"scan","description":"Открытые порты устройства"},
 {"command":"wake","description":"Включить устройство по сети"},
 {"command":"site","description":"Мониторинг сайтов: add / del"},
@@ -200,23 +202,6 @@ watch_del() {
     [ -f "$WATCH" ] && sed -i "/^$m=/d" "$WATCH"
     rm -f "/tmp/tgbot.w.$(echo "$m" | tr -d :)"
     echo "Больше не слежу за $(devname "$m")"
-}
-
-watching() {
-    [ -s "$WATCH" ] || { echo "Список слежения пуст. Добавьте: /watch <устройство> home|alive"; return; }
-    now=$(date +%s)
-    while IFS='=' read -r mac mode; do
-        [ -n "$mac" ] || continue
-        sf="/tmp/tgbot.w.$(echo "$mac" | tr -d :)"
-        st="ещё не проверялось"
-        if [ -f "$sf" ]; then
-            read state miss since < "$sf"
-            if [ "$state" = "here" ]; then st="на месте"; else st="нет"; fi
-            [ -n "$since" ] && [ "$since" -gt 0 ] && st="$st, $(fmt_dur $((now - since)))"
-        fi
-        lbl="дом"; [ "$mode" = "alive" ] && lbl="живое"
-        echo "$(devname "$mac") [$lbl]: $st"
-    done < "$WATCH"
 }
 
 who_home() {
@@ -275,8 +260,8 @@ watch_tick() {
         if [ "$cur" = "up" ]; then
             if [ "$state" = "away" ]; then
                 gone=$(fmt_dur $((now - since)))
-                if [ "$mode" = "home" ]; then send "$name пришёл домой (не было $gone)"
-                else send "$name снова в сети (не было $gone)"; fi
+                if [ "$mode" = "home" ]; then qsend "$name пришёл домой (не было $gone)"
+                else qsend "$name снова в сети (не было $gone)"; fi
                 log_event presence "$name вернулся"
             fi
             [ "$state" != "here" ] && since=$now
@@ -285,8 +270,8 @@ watch_tick() {
             miss=$((miss + 1))
             thr=$HOME_LEAVE_MIN; [ "$mode" = "alive" ] && thr=$ALIVE_DOWN_MIN
             if [ "$state" = "here" ] && [ "$miss" -ge "$thr" ]; then
-                if [ "$mode" = "home" ]; then send "$name ушёл из дома"
-                else send "$name не отвечает уже $thr мин. Проверьте питание и Wi-Fi."; fi
+                if [ "$mode" = "home" ]; then qsend "$name ушёл из дома"
+                else qsend "$name не отвечает уже $thr мин. Проверьте питание и Wi-Fi."; fi
                 log_event presence "$name пропал"
                 state=away; since=$now
             fi
@@ -370,14 +355,14 @@ sites_tick() {
         if site_ok "$t"; then
             if [ "$st" = "down" ]; then
                 d=$(fmt_dur $((now - since)))
-                send "Сайт снова работает: $t (не работал $d)"
+                qsend "Сайт снова работает: $t (не работал $d)"
                 log_event site "$t вернулся после $d"
             fi
             echo "up 0 $now" > "$sf"
         else
             fails=$((fails + 1))
             if [ "$st" = "up" ] && [ "$fails" -ge 2 ]; then
-                send "Сайт недоступен: $t"
+                qsend "Сайт недоступен: $t"
                 log_event site "$t упал"
                 st=down; since=$now
             fi
@@ -395,7 +380,7 @@ speed_daily() {
     echo "$(date +%s),$dl,$ul,$pg" >> "$SPEED"
     trim_file "$SPEED" 400
     if [ -n "$avg" ] && [ "$avg" -gt 0 ] && [ $((dl * 2)) -lt "$avg" ]; then
-        send "Скорость упала: ночной замер $dl Мбит/с при обычных ~$avg. Проверьте провайдера."
+        qsend "Скорость упала: ночной замер $dl Мбит/с при обычных ~$avg. Проверьте провайдера."
         log_event speed "упала до $dl при $avg"
     fi
 }
@@ -540,5 +525,82 @@ vpn_del() {
 vpn_names() {
     for sec in $(uci -q show wireguard_server | grep -o 'peer_[0-9]*=peers' | cut -d= -f1); do
         uci -q get "wireguard_server.$sec.name"
+    done
+}
+
+# ---------- пауза интернета ----------
+pause_start() {   # mac минут
+    pm=$1; pmin=$2
+    [ "$pm" = "$(router_mac)" ] && { echo "Сам роутер блокировать нельзя."; return; }
+    case "$pmin" in ""|*[!0-9]*) pmin=30 ;; esac
+    [ "$pmin" -ge 1 ] && [ "$pmin" -le 1440 ] || { echo "Минут от 1 до 1440."; return; }
+    do_block "$pm"
+    [ -f "$PAUSE" ] && sed -i "/^$pm=/d" "$PAUSE"
+    echo "$pm=$(( $(date +%s) + pmin * 60 ))" >> "$PAUSE"
+    echo "⏸ $(devname "$pm"): интернет на паузе $pmin мин, потом включу сам. Раньше: /unblock"
+}
+
+pause_tick() {   # cron: снять истёкшие паузы
+    [ -s "$PAUSE" ] || return
+    now=$(date +%s)
+    while IFS='=' read -r pm end; do
+        [ -n "$pm" ] || continue
+        [ "$now" -ge "${end:-0}" ] || continue
+        do_unblock "$pm"
+        qsend "▶ $(devname "$pm"): пауза закончилась, интернет снова есть."
+    done < "$PAUSE"
+}
+
+pause_lines() {
+    rmac=$(router_mac)
+    awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print tolower($4)}' /proc/net/arp | while read -r m; do
+        [ "$m" = "$rmac" ] && continue
+        is_blocked "$m" && continue
+        printf 'Пауза: %s\tpz:%s\n' "$(devname "$m")" "$m"
+    done
+}
+pause_menu() {
+    l=$(pause_lines)
+    if [ -z "$l" ]; then send "Нет активных устройств."; return; fi
+    send_kb "Кому поставить интернет на паузу?" "$(printf '%s\n' "$l" | json_kb)"
+}
+pause_dur_menu() {   # mac
+    send_kb "На сколько поставить на паузу: $(devname "$1")?" \
+        "{\"inline_keyboard\":[[{\"text\":\"15 мин\",\"callback_data\":\"pzm:$1:15\"},{\"text\":\"30 мин\",\"callback_data\":\"pzm:$1:30\"},{\"text\":\"1 час\",\"callback_data\":\"pzm:$1:60\"},{\"text\":\"2 часа\",\"callback_data\":\"pzm:$1:120\"}],[{\"text\":\"Отмена\",\"callback_data\":\"cancel:0\"}]]}"
+}
+
+# ---------- /who: что открывает устройство ----------
+who_dev() {
+    wm=$(target_mac "$1")
+    [ -n "$wm" ] || { echo "Не нашёл устройство: $1"; return; }
+    wip=$(mac2ip "$wm")
+    [ -n "$wip" ] || { echo "У $(devname "$wm") нет IP: устройство не в сети."; return; }
+    [ -s "$QLOG" ] || { echo "Журнал AdGuard пуст."; return; }
+    wc=$(date -u -d "@$(( $(date +%s) - 86400 ))" +%Y-%m-%dT%H:%M 2>/dev/null)
+    jq -c --arg c "$wc" --arg ip "$wip" 'select(.IP==$ip and .T > $c)' "$QLOG" 2>/dev/null > /tmp/tgbot.who
+    wt=$(wc -l < /tmp/tgbot.who)
+    wb=$(jq -c 'select(.Result.IsFiltered==true)' /tmp/tgbot.who 2>/dev/null | wc -l)
+    wtop=$(jq -r '.QH' /tmp/tgbot.who 2>/dev/null | sort | uniq -c | sort -rn | head -10 | awk '{print "  "$2" ("$1")"}')
+    rm -f /tmp/tgbot.who
+    printf '%s (%s) за 24 часа\nЗапросов: %s, заблокировано: %s\n\nЧаще всего:\n%s' "$(devname "$wm")" "$wip" "$wt" "$wb" "${wtop:-  нет данных}"
+}
+who_lines() {
+    awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print tolower($4)}' /proc/net/arp | while read -r m; do
+        printf '%s\twho:%s\n' "$(devname "$m")" "$m"
+    done
+}
+
+# ---------- очередь недоставленных уведомлений ----------
+OUTBOX=/tmp/tgbot.outbox
+qsend() {   # как send, но при неудаче кладёт в очередь (отправится позже из cron)
+    send "$1" && return 0
+    mkdir -p "$OUTBOX"; printf '%s' "$1" > "$OUTBOX/$(date +%s).$$.$RANDOM"
+    return 1
+}
+flush_outbox() {
+    [ -d "$OUTBOX" ] || return 0
+    for f in $(ls "$OUTBOX" 2>/dev/null | sort); do
+        [ -n "$(find "$OUTBOX/$f" -mmin +360 2>/dev/null)" ] && { rm -f "$OUTBOX/$f"; continue; }
+        send "$(cat "$OUTBOX/$f")" && rm -f "$OUTBOX/$f" || break
     done
 }

@@ -18,6 +18,9 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 # ---- сторож: если задан HC_URL (healthchecks.io), раз в минуту сообщаем, что роутер жив ----
 [ -n "$HC_URL" ] && curl -s -m 10 -o /dev/null "$HC_URL" 2>/dev/null
 
+# ---- недоставленные уведомления ----
+flush_outbox
+
 # ---- загрузка ----
 if [ ! -e "$BOOTFLAG" ]; then
     if send "$(printf 'Роутер загрузился\n\n%s' "$(status)")"; then
@@ -66,7 +69,7 @@ done
 cnt=$(logread 2>/dev/null | grep -c 'Bad password attempt\|Login attempt for nonexistent user')
 last=$(cat "$SSHCNT" 2>/dev/null || echo "$cnt")
 echo "$cnt" > "$SSHCNT"
-[ "$cnt" -ge "$((last + 3))" ] && send "Неудачные попытки входа по SSH: +$((cnt - last)) за минуту"
+[ "$cnt" -ge "$((last + 3))" ] && qsend "Неудачные попытки входа по SSH: +$((cnt - last)) за минуту"
 
 # ---- VPN: подключился / отключился ----
 now=$(date +%s)
@@ -151,6 +154,7 @@ fi
 
 # ---- слежение: люди дома, «живые» устройства, сайты ----
 watch_tick
+pause_tick
 [ $(( mm % 2 )) -eq 0 ] && sites_tick
 
 # ---- ночные и еженедельные задачи ----
@@ -164,12 +168,12 @@ run_once() {   # ключ команда...: не чаще раза в сутк�
 }
 night_job() { traffic_snap; speed_daily; }
 backup_job() { r=$(do_backup) || send "Еженедельный бэкап не удался: $r"; }
-digest_job() { send "$(digest)"; }
+digest_job() { qsend "$(digest)"; }
 case "$(date +%H%M)" in 0400) run_once night night_job ;; esac
 case "$stamp" in 70300) run_once backup backup_job ;; 10910) run_once digest digest_job ;; esac
 
 # ---- утренний отчёт 09:00 ----
 if [ "$(date +%H%M)" = "0900" ] && [ "$(cat /tmp/tgbot.reportday 2>/dev/null)" != "$(date +%Y%m%d)" ]; then
-    send "$(printf 'Доброе утро!\n\n%s\n\n%s\n\n%s' "$(status)" "$(vpn)" "$(report)")" && date +%Y%m%d > /tmp/tgbot.reportday
+    send "$(printf 'Доброе утро!\n\n%s\n\n%s' "$(status)" "$(vpn)")" && date +%Y%m%d > /tmp/tgbot.reportday
 fi
 exit 0
