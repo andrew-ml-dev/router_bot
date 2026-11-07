@@ -31,18 +31,19 @@ scp -O -q "$DIR/usr/bin/tgbot.sh"        "$HOST:/usr/bin/tgbot.sh"
 scp -O -q "$DIR/usr/bin/tgbot-poll.sh"   "$HOST:/usr/bin/tgbot-poll.sh"
 scp -O -q "$DIR/usr/bin/tgbot-wol.lua"   "$HOST:/usr/bin/tgbot-wol.lua"
 scp -O -q "$DIR/usr/bin/tgbot-png.lua"   "$HOST:/usr/bin/tgbot-png.lua"
+scp -O -q "$DIR/usr/bin/tgbot-chart.lua" "$HOST:/usr/bin/tgbot-chart.lua"
 scp -O -q "$DIR/usr/bin/tgbot-scan.lua"  "$HOST:/usr/bin/tgbot-scan.lua"
 scp -O -q "$DIR/usr/bin/tgbot-ctl"       "$HOST:/usr/bin/tgbot-ctl"
 scp -O -q "$DIR/usr/lib/tgbot-lib.sh"    "$HOST:/usr/lib/tgbot-lib.sh"
 scp -O -q "$DIR/usr/lib/tgbot-ext.sh"    "$HOST:/usr/lib/tgbot-ext.sh"
 scp -O -q "$DIR/etc/init.d/tgbot"        "$HOST:/etc/init.d/tgbot"
-$SSH 'chmod 755 /usr/bin/tgbot.sh /usr/bin/tgbot-poll.sh /usr/bin/tgbot-wol.lua /usr/bin/tgbot-png.lua /usr/bin/tgbot-scan.lua /usr/bin/tgbot-ctl /etc/init.d/tgbot; chmod 644 /usr/lib/tgbot-lib.sh /usr/lib/tgbot-ext.sh'
+$SSH 'chmod 755 /usr/bin/tgbot.sh /usr/bin/tgbot-poll.sh /usr/bin/tgbot-wol.lua /usr/bin/tgbot-png.lua /usr/bin/tgbot-chart.lua /usr/bin/tgbot-scan.lua /usr/bin/tgbot-ctl /etc/init.d/tgbot; chmod 644 /usr/lib/tgbot-lib.sh /usr/lib/tgbot-ext.sh'
 
 echo "==> QR-коды для /vpn add (пакет qrencode)"
 $SSH 'command -v qrencode >/dev/null || { opkg update >/dev/null 2>&1; opkg install qrencode >/dev/null 2>&1; }; command -v qrencode >/dev/null && echo "qrencode: ok" || echo "ВНИМАНИЕ: qrencode не установился, команда /vpn add работать не будет (opkg install qrencode)"'
 
 echo "==> Сохранение бота при обновлении прошивки (sysupgrade.conf)"
-$SSH 'for f in /usr/bin/tgbot.sh /usr/bin/tgbot-poll.sh /usr/bin/tgbot-ctl /usr/bin/tgbot-wol.lua /usr/bin/tgbot-png.lua /usr/bin/tgbot-scan.lua /usr/lib/tgbot-lib.sh /usr/lib/tgbot-ext.sh /etc/init.d/tgbot /etc/tgbot.conf /etc/tgbot.known /etc/tgbot.names /etc/tgbot.watch /etc/tgbot.sites /etc/tgbot.speed /etc/tgbot.events /etc/tgbot.traffic /etc/tgbot.pause /etc/tgbot.hooks/away /etc/tgbot.hooks/home /etc/tgbot.hooks/off /etc/tgbot.hooks/heat /etc/tgbot.ha; do grep -qxF "$f" /etc/sysupgrade.conf 2>/dev/null || echo "$f" >> /etc/sysupgrade.conf; done'
+$SSH 'for f in /usr/bin/tgbot.sh /usr/bin/tgbot-poll.sh /usr/bin/tgbot-ctl /usr/bin/tgbot-wol.lua /usr/bin/tgbot-png.lua /usr/bin/tgbot-chart.lua /usr/bin/tgbot-scan.lua /usr/lib/tgbot-lib.sh /usr/lib/tgbot-ext.sh /etc/init.d/tgbot /etc/tgbot.conf /etc/tgbot.known /etc/tgbot.names /etc/tgbot.watch /etc/tgbot.sites /etc/tgbot.speed /etc/tgbot.events /etc/tgbot.traffic /etc/tgbot.pause /etc/tgbot.hooks/away /etc/tgbot.hooks/home /etc/tgbot.hooks/off /etc/tgbot.hooks/heat /etc/tgbot.ha; do grep -qxF "$f" /etc/sysupgrade.conf 2>/dev/null || echo "$f" >> /etc/sysupgrade.conf; done'
 
 if $SSH 'test -s /etc/tgbot.conf'; then
     echo "==> /etc/tgbot.conf уже есть, оставляю как есть"

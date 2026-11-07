@@ -163,7 +163,8 @@ menu_rows() {   # раздел -> первая строка: заголовок,
     case "$1" in
         home) printf '%s\n' "🏠 Дом" \
             "Кто дома	cmd:home	Датчики и батареи	cmd:sensors" \
-            "Журнал дома	cmd:log дом	Выключить всё	ask:off" \
+            "📈 Графики	cmd:graph	Журнал дома	cmd:log дом" \
+            "👋 Ухожу	ask:leave	Выключить всё	ask:off" \
             "‹ Назад	nav:main" ;;
         net) printf '%s\n' "🌐 Сеть" \
             "Статус роутера	cmd:status	Кто в сети	cmd:clients" \
@@ -655,10 +656,9 @@ log_ha() {   # строки «epoch<TAB>текст» за последние 24 
     [ -r "$HAENV" ] || return
     . "$HAENV"
     st=$(date -u -d "@$(( $(date +%s) - 86400 ))" +%Y-%m-%dT%H:%M:%SZ)
-    ents="binary_sensor.koridor_otkrytiia_door,binary_sensor.zal_balkon_door,binary_sensor.tualet_dvizhenie_motion,binary_sensor.vibration_sensor_occupancy,input_boolean.house_empty,input_select.heat_mode"
+    ents="binary_sensor.koridor_otkrytiia_door,binary_sensor.tualet_dvizhenie_motion,binary_sensor.vibration_sensor_occupancy,input_boolean.house_empty,input_select.heat_mode"
     curl -s -m 20 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/history/period/$st?filter_entity_id=$ents&minimal_response&no_attributes" 2>/dev/null | jq -r '
       {"binary_sensor.koridor_otkrytiia_door":{"on":"🚪 Входная дверь открыта","off":"🚪 Входная дверь закрыта"},
-       "binary_sensor.zal_balkon_door":{"on":"🚪 Балкон: дверь открыта","off":"🚪 Балкон: дверь закрыта"},
        "binary_sensor.tualet_dvizhenie_motion":{"on":"🚽 Движение в туалете"},
        "binary_sensor.vibration_sensor_occupancy":{"on":"📳 Вибрация"},
        "input_boolean.house_empty":{"on":"🏠 Дом считается пустым","off":"🏠 Кто-то дома"},
@@ -742,7 +742,7 @@ HA_JQ='(map({key: .entity_id, value: .}) | from_entries) as $s
         and (.entity_id | startswith("sensor.pixel") | not) and (.state | tonumber? // null) != null)]
         | sort_by(.state | tonumber)
         | map({n: (.attributes.friendly_name | rtrimstr(" Батарея") | rtrimstr(" ")), v: (.state | tonumber | round)});
-    def gone: [["binary_sensor.koridor_otkrytiia_door","Входная дверь"],["binary_sensor.zal_balkon_door","Балкон"],
+    def gone: [["binary_sensor.koridor_otkrytiia_door","Входная дверь"],
         ["binary_sensor.tualet_dvizhenie_motion","Движение в туалете"],["sensor.temperatura_temperature","Температура спальня"],
         ["sensor.tualet_temp_temperature","Температура туалет"],["climate.zal_levyi","Радиатор зал левый"],
         ["climate.zal_pravyi_divan","Радиатор зал правый"],["climate.spalnia_radiator","Радиатор спальня"],
@@ -781,10 +781,67 @@ morning_brief() {   # утренняя сводка: погода, дом, чт�
     door=$(echo "$nl" | grep -c "Входная дверь открыта")
     ngt=""
     [ "$door" -gt 0 ] && ngt="входная дверь открывалась $door раз (последний — $(echo "$nl" | grep "Входная дверь открыта" | sort -n | tail -1 | cut -f1 | xargs -I{} date -d @{} +%H:%M))"
-    bal=$(echo "$nl" | grep -c "Балкон: дверь открыта"); [ "$bal" -gt 0 ] && ngt="${ngt:+$ngt; }балкон открывался $bal раз"
     wan=$(echo "$nl" | grep "Интернета не было" | sed 's/.*Интернета не было //'); [ -n "$wan" ] && ngt="${ngt:+$ngt; }интернет пропадал: $(echo "$wan" | tr '\n' ',' | sed 's/,$//')"
     nd=$(echo "$nl" | grep -c "Новое устройство"); [ "$nd" -gt 0 ] && ngt="${ngt:+$ngt; }новых устройств в сети: $nd"
     [ -n "$ngt" ] || ngt="спокойно"
     printf '☀️ Доброе утро!\n\n%s\n\n🌙 Ночью: %s\n\n🌐 Роутер: %s устройств в сети, %s°C' \
         "${house:-Home Assistant не ответил.}" "$ngt" "$(clients | wc -l)" "$(( $(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0) / 1000 ))"
+}
+
+# ---- графики температуры и влажности (PNG рисует /usr/bin/tgbot-chart.lua) ----
+graph_send() {   # t|h (температура|влажность) 1|7 (дней)
+    k=${1:-t}; dd=${2:-1}
+    [ -r "$HAENV" ] || { send "Home Assistant не подключён: нет /etc/tgbot.ha."; return; }
+    . "$HAENV"
+    now=$(date +%s); t0=$((now - dd * 86400))
+    st=$(date -u -d "@$t0" +%Y-%m-%dT%H:%M:%SZ); en=$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)
+    if [ "$k" = h ]; then
+        ents="sensor.temperatura_humidity,sensor.tualet_temp_humidity,weather.home"
+    else
+        ents="sensor.temperatura_temperature,sensor.tualet_temp_temperature,climate.zal_levyi,weather.home,climate.zal_pravyi_divan,climate.spalnia_radiator,climate.tualet_radiator"
+    fi
+    dat=/tmp/tgbot.chart.txt; png=/tmp/tgbot.chart.png
+    curl -s -m 40 -H "Authorization: Bearer $HA_TOKEN" \
+        "$HA_URL/api/history/period/$st?end_time=$en&filter_entity_id=$ents&significant_changes_only=0" 2>/dev/null \
+      | jq -r --arg k "$k" --argjson now "$now" '
+        def ts: (.last_changed[0:19] + "Z") | fromdateiso8601;
+        def val($e):
+          if $k == "h" then
+            (if $e == "sensor.temperatura_humidity" then [1, (.state | tonumber?)]
+             elif $e == "sensor.tualet_temp_humidity" then [2, (.state | tonumber?)]
+             elif $e == "weather.home" then [4, .attributes.humidity] else empty end)
+          else
+            (if $e == "sensor.temperatura_temperature" then [1, (.state | tonumber?)]
+             elif $e == "sensor.tualet_temp_temperature" then [2, (.state | tonumber?)]
+             elif $e == "climate.zal_levyi" then [3, .attributes.current_temperature]
+             elif $e == "weather.home" then [4, .attributes.temperature] else empty end)
+          end;
+        .[]? | (.[0].entity_id // "") as $e
+        | ( (.[] | select(.state != null) | . as $p | val($e) as $v | select($v[1] != null) | "\(if $v[0] == 4 then "o" else "s" end) \($v[0]) \($p | ts) \($v[1])"),
+            (if $k == "t" and ($e | startswith("climate.")) then
+               [.[] | {t: ts, s: .state}] as $a
+               | range(0; $a | length) as $i | select($a[$i].s == "heat" or $a[$i].s == "heat_cool")
+               | "b \($a[$i].t) \($a[$i + 1].t // $now)"
+             else empty end) )' > "$dat" 2>/dev/null
+    tz=$(date +%z | awk '{s=substr($0,1,1); h=substr($0,2,2); m=substr($0,4,2); print (s=="-"?-1:1)*(h*3600+m*60)}')
+    if ! grep -q '^s ' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" < "$dat" 2>/dev/null; then
+        rm -f "$dat" "$png"; send "Нет данных для графика (Home Assistant не ответил или история пуста)."; return
+    fi
+    rng=$(awk '$1=="s" || $1=="o" {s=$2; v=$4; if (!(s in mn) || v<mn[s]) mn[s]=v; if (!(s in mx) || v>mx[s]) mx[s]=v}
+        END {for (s in mn) printf "%s %s %s\n", s, mn[s], mx[s]}' "$dat" | sort -n)
+    u="°"; [ "$k" = h ] && u="%"
+    leg=$(echo "$rng" | while read s a b; do
+        case "$k$s" in (t1|h1) n="🔴 Спальня";; (t2|h2) n="🔵 Туалет";; (t3) n="🟢 Зал (по радиатору)";; (t4|h4) n="🌤 Улица (на графике нет)";; (*) n="";; esac
+        [ -n "$n" ] && echo "$n: $a–$b$u"
+    done)
+    if [ "$k" = h ]; then ttl="💧 Влажность"; else ttl="🌡 Температура"; fi
+    [ "$dd" = 1 ] && per="24 часа" || per="$dd дней"
+    cap=$(printf '%s за %s\n%s' "$ttl" "$per" "$leg")
+    [ "$k" = t ] && grep -q '^b ' "$dat" && cap=$(printf '%s\n🟧 полоса внизу — включён хотя бы один радиатор' "$cap")
+    [ "$k" = h ] && cap=$(printf '%s\nНорма 40–60%%. Выше 65%% — риск плесени, ниже 35%% — сухо.' "$cap")
+    kb=$(printf '%s\n' "$([ "$k" = t ] && echo '• Температура' || echo 'Температура')	g:t$dd	$([ "$k" = h ] && echo '• Влажность' || echo 'Влажность')	g:h$dd" \
+        "$([ "$dd" = 1 ] && echo '• 24 часа' || echo '24 часа')	g:${k}1	$([ "$dd" = 7 ] && echo '• 7 дней' || echo '7 дней')	g:${k}7" | json_kb)
+    if [ -n "$CHART_DRY" ]; then echo "$cap"; return; fi   # отладка: файл остаётся в /tmp, в чат не отправляется
+    curl -s -m 60 -F "chat_id=$CHAT_ID" -F "photo=@$png" -F "caption=$cap" -F "reply_markup=$kb" "$API/sendPhoto" >/dev/null 2>&1
+    rm -f "$dat" "$png"
 }

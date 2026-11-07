@@ -8,7 +8,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)/router"
 for f in "$DIR"/usr/bin/*.sh "$DIR"/usr/lib/*.sh; do sh -n "$f" || { echo "Синтаксическая ошибка в $f, обновление отменено"; exit 1; }; done
 
 echo "==> Копирование файлов на $HOST"
-for f in tgbot.sh tgbot-poll.sh tgbot-wol.lua tgbot-png.lua tgbot-scan.lua tgbot-ctl; do
+for f in tgbot.sh tgbot-poll.sh tgbot-wol.lua tgbot-png.lua tgbot-chart.lua tgbot-scan.lua tgbot-ctl; do
     scp -O -q "$DIR/usr/bin/$f" "$HOST:/usr/bin/$f"
 done
 scp -O -q "$DIR/usr/lib/tgbot-lib.sh" "$DIR/usr/lib/tgbot-ext.sh" "$HOST:/usr/lib/"

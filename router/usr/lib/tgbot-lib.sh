@@ -219,6 +219,7 @@ handle() {
             if [ -z "$pm" ]; then send "Не нашёл устройство: $t"; else send "$(pause_start "$pm" "$pmin")"; fi ;;
         /log)       log_show "$args" ;;
         /sensors)   send "$(sensors_view)" ;;
+        /graph)     case "$args" in *влаж*|h*) graph_send h "$(echo "$args" | grep -q 7 && echo 7 || echo 1)" ;; *) graph_send t "$(echo "$args" | grep -q 7 && echo 7 || echo 1)" ;; esac ;;
         /heat)
             [ -x "$HOOKS/heat" ] || { send "Отопление не подключено: нет /etc/tgbot.hooks/heat (см. docs/HOME-ASSISTANT.md)."; return; }
             "$HOOKS/heat" status >/dev/null 2>&1 || send "Home Assistant не отвечает." ;;
@@ -267,7 +268,7 @@ handle() {
         /start|/help)
             send "$(printf '%s\n' \
 'Удобнее всего — /menu: там всё по разделам.' '' \
-'🏠 Дом' '/heat — отопление' '/sensors — температура, влажность, батареи' '/log [дом|сеть|люди] — журнал событий' '/home — кто дома' '' \
+'🏠 Дом' '/heat — отопление (режим, день/ночь ±)' '/graph [влажность] [7] — графики температуры и влажности' '/sensors — температура, влажность, батареи' '/log [дом|сеть|люди] — журнал событий' '/home — кто дома' '' \
 '🌐 Сеть' '/status — роутер' '/clients — кто в сети' '/speedtest, /speedhist — скорость и её история' '/report — DNS за сутки' '/site add|del, /sites — мониторинг сайтов' '' \
 '📱 Устройства' '/watch, /unwatch — слежение' '/pause <устройство> [минут] — пауза интернета' '/block, /unblock — блокировка' '/who <устройство> — какие сайты открывает' '/wake <устройство> — включить по сети' '/scan <устройство> — открытые порты' '/name <устройство> <имя> — переименовать' '' \
 '⚙️ Сервис' '/vpn [add|del Имя] — VPN' '/digest — итоги недели' '/backup — бэкап роутера' '/reboot — перезагрузка')" ;;
@@ -312,7 +313,12 @@ handle_cb() {
         who:*)    m=${data#who:}; tg_delete "$CB_MID"; CB_MID=""; send "$(who_dev "$m")" ;;
         nav:*)    menu_panel "${data#nav:}" "$CB_MID" ;;
         log:*)    log_show "${data#log:}" "$CB_MID" ;;
+        g:t1|g:t7|g:h1|g:h7) g=${data#g:}; tg_delete "$CB_MID"; CB_MID=""; graph_send "$(echo "$g" | cut -c1)" "$(echo "$g" | cut -c2)" ;;
         ask:off)  send_kb "Выключить свет, розетки, телевизор и кондиционеры?" '{"inline_keyboard":[[{"text":"Выключить","callback_data":"haoff:1"},{"text":"Отмена","callback_data":"cancel:0"}]]}' ;;
+        ask:leave) send_kb "Режим «Ухожу»: выключить свет, розетки, телевизор и кондиционеры, отопление в эконом, через 5 минут считать дом пустым?" '{"inline_keyboard":[[{"text":"👋 Ухожу","callback_data":"heat:leave"},{"text":"Отмена","callback_data":"cancel:0"}]]}' ;;
+        heat:d+|heat:d-|heat:n+|heat:n-) tg_delete "$CB_MID"; CB_MID=""
+                  [ -x "$HOOKS/heat" ] && { "$HOOKS/heat" "${data#heat:}" >/dev/null 2>&1 || toast "Home Assistant не отвечает."; } ;;
+        heat:leave) [ -x "$HOOKS/heat" ] && ( "$HOOKS/heat" leave >/dev/null 2>&1 & ); ui_done "✓ Ухожу: выключаю, подробности придут следующим сообщением." ;;
         heat:status) tg_delete "$CB_MID"; CB_MID=""
                   [ -x "$HOOKS/heat" ] && { "$HOOKS/heat" status >/dev/null 2>&1 || toast "Home Assistant не отвечает."; } ;;
         haoff:*)  [ -x "$HOOKS/off" ] && ( "$HOOKS/off" >/dev/null 2>&1 & ); ui_done "✓ Выключаю свет, розетки и телевизор." ;;
