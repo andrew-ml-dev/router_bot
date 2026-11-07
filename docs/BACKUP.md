@@ -47,3 +47,8 @@ ssh root@192.168.8.1 'sysupgrade -r /tmp/router-backup.tar.gz && reboot'
 
 Установщик добавляет файлы бота и его данные в `/etc/sysupgrade.conf`. При обновлении прошивки **с сохранением настроек** бот останется на месте.
 Пакет `qrencode` придётся поставить заново (`opkg install qrencode`).
+
+## Бэкап Home Assistant
+
+HA бэкапится сам (ежедневно, 7 копий, копия уходит на роутер в `/root/ha-backups`), см. [HOME-ASSISTANT.md](HOME-ASSISTANT.md#резервные-копии-ha).
+Восстановление: при установке HA выберите «Восстановить из резервной копии» и укажите ключ шифрования из `/opt/ha-backup-key`.

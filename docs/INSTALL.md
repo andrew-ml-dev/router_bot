@@ -89,6 +89,16 @@ VPN_ENDPOINT=vpn.example.com          # адрес роутера для VPN-к�
 Для `/vpn add` нужен пакет `qrencode` (`opkg install qrencode`, установщик делает это сам). Штатный `qrencode` не умеет PNG,
 поэтому картинку QR-кода рисует `tgbot-png.lua`.
 
+## 7. Необязательно: Home Assistant
+
+Для отопления, «никого нет дома», датчиков, графиков и календаря:
+
+1. Создайте в HA долгосрочный токен (профиль → «Безопасность»), положите на роутер `/etc/tgbot.ha` по образцу `router/etc/tgbot.ha.example`, `chmod 600`.
+2. Скопируйте нужные хуки из `router/etc/tgbot.hooks/*.example` в `/etc/tgbot.hooks/` без `.example`, впишите webhook-id автоматизаций HA, `chmod 700`.
+3. Настройте автоматизации HA: [HOME-ASSISTANT.md](HOME-ASSISTANT.md).
+
+Без этих файлов бот работает как раньше, а команды HA отвечают, что Home Assistant не подключён.
+
 ## Обновление
 
 ```sh

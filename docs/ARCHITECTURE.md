@@ -8,12 +8,15 @@ router/
 ├── usr/bin/tgbot-poll.sh   слушатель команд и кнопок (демон, long polling)
 ├── usr/bin/tgbot-wol.lua   отправка Wake-on-LAN (Lua + luasocket)
 ├── usr/bin/tgbot-png.lua   QR-код в PNG (штатный qrencode собран без PNG)
+├── usr/bin/tgbot-chart.lua графики в PNG (палитра, без внешних библиотек)
 ├── usr/bin/tgbot-scan.lua  проверка портов и TCP-доступности
 ├── usr/bin/tgbot-ctl       управление: on / off / status / remove
 ├── usr/lib/tgbot-lib.sh    общая библиотека: отправка, имена, блокировка, отчёты, команды
-├── usr/lib/tgbot-ext.sh    слежение, сайты, VPN из бота, бэкап, история скорости, дайджест
+├── usr/lib/tgbot-ext.sh    слежение, сайты, VPN, бэкап, скорость, дайджест, меню, журнал, HA (датчики, графики, календарь, сводка)
 ├── etc/init.d/tgbot        служба procd для слушателя
-└── etc/tgbot.conf.example  пример конфига (TOKEN, CHAT_ID)
+├── etc/tgbot.conf.example  пример конфига (TOKEN, CHAT_ID)
+├── etc/tgbot.ha.example    пример доступа к Home Assistant (HA_URL, HA_TOKEN)
+└── etc/tgbot.hooks/*.example  хуки away / home / off / heat (webhook HA)
 ```
 
 Данные на роутере:
@@ -29,6 +32,8 @@ router/
 | `/etc/tgbot.traffic` | флеш | суточные снимки счётчиков WAN `epoch,rx,tx` |
 | `/etc/tgbot.pause` | флеш | паузы интернета `mac=epoch_конца` (снимаются cron-ом) |
 | `/etc/tgbot.events` | флеш | журнал событий `epoch\|тип\|текст` (для дайджеста, до 600 строк) |
+| `/etc/tgbot.ha` | флеш, `chmod 600` | адрес и токен Home Assistant (чтение) |
+| `/etc/tgbot.hooks/*` | флеш, `chmod 700` | хуки с webhook-id HA |
 | `/tmp/tgbot.*` | RAM | состояния (offset, VPN, флаги тревог), сбрасываются при перезагрузке |
 
 Флеш-память не изнашивается: частые записи идут только в `/tmp`.
@@ -77,6 +82,15 @@ router/
 - **Бэкап**: `sysupgrade -b` → `openssl enc -aes-256-cbc -pbkdf2` → `sendDocument`. См. [BACKUP.md](BACKUP.md).
 - **Недельный дайджест**: агрегирует журнал AdGuard, `/etc/tgbot.events`, историю скорости и трафика.
 
+## Интерфейс
+
+- **Меню** (`menu_rows` / `menu_panel`): главный экран и разделы; переход редактирует то же сообщение (`editMessageText`), кнопки `nav:<раздел>`.
+  Плитка `cmd:<команда>` выполняет команду как будто её набрали.
+- **Журнал** (`log_view`): события HA (`/api/history`) + `/etc/tgbot.events`, сортировка по времени, одинаковые подряд в пределах 30 минут схлопываются (`×N`), фильтры `log:all|dom|net|ppl`.
+- **Звук**: `send текст q` и `send_kb текст разметка q` отправляют с `disable_notification=true`.
+- **Графики**: история HA → строки `s <серия> <epoch> <значение>` и `b <начало> <конец>` (радиатор включён) → `tgbot-chart.lua` → `sendPhoto`.
+- **Данные HA для сводок**: один запрос `/api/states` и общий набор jq-функций `HA_JQ` (комнаты, батареи, пропавшие датчики, отопление).
+
 ## Безопасность при перезагрузке
 
 При старте слушатель вызывает `getUpdates?offset=-1`, отбрасывая накопленные сообщения и нажатия кнопок.
@@ -85,7 +99,9 @@ router/
 ## Зависимости
 
 `curl`, `jq`, `lua` (с luasocket и `bit`), `ipset`, `conntrack`, `iwinfo`, `wg`, `openssl`, `sysupgrade`, BusyBox `ash`, cron; для `/vpn add` ещё `qrencode` (`opkg install qrencode`). Всё это есть в прошивке GL.iNet 4.x.
-Внешние сервисы: `api.telegram.org`, `api.macvendors.com` (только префикс MAC), `speed.cloudflare.com` (только `/speedtest`).
+Внешние сервисы: `api.telegram.org`, `api.macvendors.com` (только префикс MAC), `speed.cloudflare.com` (только `/speedtest`). Home Assistant — только в локальной сети.
+
+На роутере `jq` 1.6 собран **без регулярных выражений** (`test`, `sub`, `gsub`, `match` не работают): используйте `startswith`, `endswith`, `split`, `ltrimstr`/`rtrimstr`.
 
 ## Известные ограничения
 

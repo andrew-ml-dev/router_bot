@@ -4,6 +4,9 @@ tgbot.conf
 !router/etc/tgbot.conf.example
 tgbot.known
 tgbot.names
+tgbot.ha
+/router/etc/tgbot.hooks/*
+!/router/etc/tgbot.hooks/*.example
 *.key
 *.pem
 
