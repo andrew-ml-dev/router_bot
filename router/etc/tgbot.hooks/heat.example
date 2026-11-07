@@ -1,0 +1,4 @@
+#!/bin/sh
+# Команды отоплению в Home Assistant: heat status | auto | eco | off | ecoaway
+# Замените <ID> на webhook_id автоматизации «Отопление - команды из Telegram».
+curl -s -m 10 -X POST -H 'Content-Type: application/json' -d "{\"cmd\":\"$1\"}" http://192.168.8.112:8123/api/webhook/<ID>

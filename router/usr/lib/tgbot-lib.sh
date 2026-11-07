@@ -6,15 +6,31 @@ NAMES=/etc/tgbot.names          # свои имена устройств: mac=И
 QLOG=/etc/AdGuardHome/data/querylog.json
 
 # ---------- отправка ----------
-send() {
+# Важность: без второго аргумента сообщение приходит со звуком (тревоги, ответы на команды);
+# с аргументом q — без звука (информационные: VPN, интернет вернулся, сводки).
+send() {   # текст [q]
     curl -s -m 15 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$1" \
+        --data-urlencode "disable_notification=$([ "$2" = q ] && echo true || echo false)" \
         "$API/sendMessage" | grep -q '"ok":true'
 }
 
-# send_kb "текст" '{"inline_keyboard":[...]}'
+# send_kb "текст" '{"inline_keyboard":[...]}' [q]
 send_kb() {
     curl -s -m 15 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$1" \
+        --data-urlencode "disable_notification=$([ "$3" = q ] && echo true || echo false)" \
         --data-urlencode "reply_markup=$2" "$API/sendMessage" | grep -q '"ok":true'
+}
+
+# отредактировать сообщение на месте (навигация по меню, фильтры журнала)
+edit_msg() {   # message_id текст [разметка]
+    curl -s -m 15 --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "message_id=$1" \
+        --data-urlencode "text=$2" ${3:+--data-urlencode "reply_markup=$3"} \
+        "$API/editMessageText" >/dev/null 2>&1
+}
+
+night() {   # 23:00–07:00
+    h=$(date +%H); h=${h#0}; [ -z "$h" ] && h=0
+    [ "$h" -ge 23 ] || [ "$h" -lt 7 ]
 }
 
 answer_cb() {
@@ -201,6 +217,11 @@ handle() {
             t=${args%% *}; pmin=""; case "$args" in *" "*) pmin=${args#* } ;; esac
             pm=$(target_mac "$t")
             if [ -z "$pm" ]; then send "Не нашёл устройство: $t"; else send "$(pause_start "$pm" "$pmin")"; fi ;;
+        /log)       log_show "$args" ;;
+        /sensors)   send "$(sensors_view)" ;;
+        /heat)
+            [ -x "$HOOKS/heat" ] || { send "Отопление не подключено: нет /etc/tgbot.hooks/heat (см. docs/HOME-ASSISTANT.md)."; return; }
+            "$HOOKS/heat" status >/dev/null 2>&1 || send "Home Assistant не отвечает." ;;
         /who)
             if [ -n "$args" ]; then send "$(who_dev "$args")"
             else send_kb "Чьи запросы показать?" "$(who_lines | json_kb)"; fi ;;
@@ -244,7 +265,12 @@ handle() {
             send_kb "Перезагрузить роутер? Интернет пропадёт примерно на 2 минуты." \
                 '{"inline_keyboard":[[{"text":"Да, перезагрузить","callback_data":"reboot:yes"},{"text":"Отмена","callback_data":"reboot:no"}]]}' ;;
         /start|/help)
-            send "$(printf 'Команды:\n/status — состояние роутера\n/clients — кто в сети\n/vpn — кто подключён по VPN (/vpn add Имя, /vpn del Имя)\n/report — DNS за 24 часа\n/speedtest — скорость интернета\n/block <устройство> — заблокировать\n/unblock <устройство> — разблокировать\n/pause <устройство> [минут] — интернет на паузу\n/who <устройство> — какие сайты открывает\n/wake <устройство> — включить по сети\n/name <устройство> <имя> — задать имя\n/menu — панель кнопок\n/watch — выбрать устройство для слежения (или /watch <устройство> home|alive), /unwatch\n/home — кто дома\n/scan <устройство> — проверка открытых портов\n/site add|del, /sites — мониторинг сайтов\n/speedhist — история скорости\n/backup — зашифрованный бэкап конфигурации\n/digest — итоги недели\n/reboot — перезагрузить роутер')" ;;
+            send "$(printf '%s\n' \
+'Удобнее всего — /menu: там всё по разделам.' '' \
+'🏠 Дом' '/heat — отопление' '/sensors — температура, влажность, батареи' '/log [дом|сеть|люди] — журнал событий' '/home — кто дома' '' \
+'🌐 Сеть' '/status — роутер' '/clients — кто в сети' '/speedtest, /speedhist — скорость и её история' '/report — DNS за сутки' '/site add|del, /sites — мониторинг сайтов' '' \
+'📱 Устройства' '/watch, /unwatch — слежение' '/pause <устройство> [минут] — пауза интернета' '/block, /unblock — блокировка' '/who <устройство> — какие сайты открывает' '/wake <устройство> — включить по сети' '/scan <устройство> — открытые порты' '/name <устройство> <имя> — переименовать' '' \
+'⚙️ Сервис' '/vpn [add|del Имя] — VPN' '/digest — итоги недели' '/backup — бэкап роутера' '/reboot — перезагрузка')" ;;
         *) send "Не понял. Список команд: /help" ;;
     esac
 }
@@ -284,7 +310,20 @@ handle_cb() {
         pz:*)     m=${data#pz:}; tg_delete "$CB_MID"; CB_MID=""; pause_dur_menu "$m" ;;
         pzm:*)    r=${data#pzm:}; m=${r%:*}; ui_done "$(pause_start "$m" "${r##*:}")" 12 ;;
         who:*)    m=${data#who:}; tg_delete "$CB_MID"; CB_MID=""; send "$(who_dev "$m")" ;;
+        nav:*)    menu_panel "${data#nav:}" "$CB_MID" ;;
+        log:*)    log_show "${data#log:}" "$CB_MID" ;;
+        ask:off)  send_kb "Выключить свет, розетки, телевизор и кондиционеры?" '{"inline_keyboard":[[{"text":"Выключить","callback_data":"haoff:1"},{"text":"Отмена","callback_data":"cancel:0"}]]}' ;;
+        heat:status) tg_delete "$CB_MID"; CB_MID=""
+                  [ -x "$HOOKS/heat" ] && { "$HOOKS/heat" status >/dev/null 2>&1 || toast "Home Assistant не отвечает."; } ;;
         haoff:*)  [ -x "$HOOKS/off" ] && ( "$HOOKS/off" >/dev/null 2>&1 & ); ui_done "✓ Выключаю свет, розетки и телевизор." ;;
+        heat:*)   m=${data#heat:}
+                  case "$m" in
+                      skip) ui_done "Ок, отопление не меняю." ;;
+                      auto|eco|off|ecoaway)
+                          [ -x "$HOOKS/heat" ] && ( "$HOOKS/heat" "$m" >/dev/null 2>&1 & )
+                          case "$m" in auto) t="авто";; eco|ecoaway) t="эконом";; off) t="выкл";; esac
+                          ui_done "✓ Отопление: $t." ;;
+                  esac ;;
         haskip:*) ui_done "Ок, оставляю включённым." ;;
         imhome:*) echo home > "$HOUSE"; : > "$HOLD"
                   [ -x "$HOOKS/home" ] && ( "$HOOKS/home" >/dev/null 2>&1 & )

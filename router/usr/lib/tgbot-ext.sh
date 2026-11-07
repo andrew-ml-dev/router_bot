@@ -158,43 +158,50 @@ unblock_menu() {
     send_kb "Кого разблокировать?" "$(printf '%s\n' "$l" | json_kb)"
 }
 
-# --- панель команд и подсказки при вводе «/»
-menu_panel() {
-    send_kb "Меню" "$(printf '%s\n' \
-        "Статус	cmd:status	Кто в сети	cmd:clients" \
-        "Кто дома	cmd:home	VPN	cmd:vpn" \
-        "Скорость	cmd:speedtest	Отчёт DNS	cmd:report" \
-        "Слежение	cmd:watch	Пауза	cmd:pause" \
-        "Сайты	cmd:sites	История скорости	cmd:speedhist" \
-        "Что открывают	cmd:who	Блокировка	cmd:block" \
-        "Помощь	cmd:help	Итоги недели	cmd:digest" | json_kb)"
+# --- панель команд: главное меню и разделы; переходы редактируют то же сообщение
+menu_rows() {   # раздел -> первая строка: заголовок, дальше строки плиток
+    case "$1" in
+        home) printf '%s\n' "🏠 Дом" \
+            "Кто дома	cmd:home	Датчики и батареи	cmd:sensors" \
+            "Журнал дома	cmd:log дом	Выключить всё	ask:off" \
+            "‹ Назад	nav:main" ;;
+        net) printf '%s\n' "🌐 Сеть" \
+            "Статус роутера	cmd:status	Кто в сети	cmd:clients" \
+            "Скорость	cmd:speedtest	История скорости	cmd:speedhist" \
+            "Отчёт DNS	cmd:report	Сайты	cmd:sites" \
+            "‹ Назад	nav:main" ;;
+        dev) printf '%s\n' "📱 Устройства" \
+            "Следить	cmd:watch	Не следить	cmd:unwatch" \
+            "Пауза интернета	cmd:pause	Что открывают	cmd:who" \
+            "Заблокировать	cmd:block	Разблокировать	cmd:unblock" \
+            "‹ Назад	nav:main" ;;
+        svc) printf '%s\n' "⚙️ Сервис" \
+            "VPN	cmd:vpn	Итоги недели	cmd:digest" \
+            "Бэкап роутера	cmd:backup	Перезагрузка	cmd:reboot" \
+            "Помощь	cmd:help	‹ Назад	nav:main" ;;
+        *) printf '%s\n' "Меню" \
+            "🏠 Дом	nav:home	🌡 Отопление	cmd:heat" \
+            "📋 Журнал	cmd:log	🌐 Сеть	nav:net" \
+            "📱 Устройства	nav:dev	⚙️ Сервис	nav:svc" ;;
+    esac
+}
+menu_panel() {   # [раздел] [message_id для редактирования]
+    r=$(menu_rows "$1")
+    t=$(echo "$r" | head -n1); kb=$(echo "$r" | tail -n +2 | json_kb)
+    if [ -n "$2" ]; then edit_msg "$2" "$t" "$kb"; else send_kb "$t" "$kb"; fi
 }
 
+# подсказки при вводе «/»: только частые команды, остальные доступны через /menu и работают, если их набрать
 set_commands() {
     curl -s -m 15 -H 'Content-Type: application/json' -d '{"commands":[
-{"command":"menu","description":"Панель быстрых команд"},
+{"command":"menu","description":"Меню: дом, сеть, устройства, сервис"},
+{"command":"heat","description":"Отопление: температуры и режим"},
+{"command":"sensors","description":"Датчики, температура, батареи"},
+{"command":"log","description":"Журнал событий"},
+{"command":"home","description":"Кто дома"},
 {"command":"status","description":"Состояние роутера"},
 {"command":"clients","description":"Кто в сети"},
-{"command":"home","description":"Кто дома"},
-{"command":"vpn","description":"VPN: кто подключён, /vpn add Имя"},
-{"command":"speedtest","description":"Замер скорости интернета"},
-{"command":"speedhist","description":"История скорости"},
-{"command":"report","description":"DNS и блокировки за 24 часа"},
-{"command":"watch","description":"Выбрать устройство для слежения"},
-{"command":"unwatch","description":"Убрать устройство из слежения"},
-{"command":"block","description":"Заблокировать устройство"},
-{"command":"unblock","description":"Разблокировать устройство"},
-{"command":"pause","description":"Интернет устройству на паузу"},
-{"command":"who","description":"Какие сайты открывает устройство"},
-{"command":"scan","description":"Открытые порты устройства"},
-{"command":"wake","description":"Включить устройство по сети"},
-{"command":"site","description":"Мониторинг сайтов: add / del"},
-{"command":"sites","description":"Статус сайтов"},
-{"command":"name","description":"Задать имя устройству"},
-{"command":"backup","description":"Зашифрованный бэкап настроек"},
-{"command":"digest","description":"Итоги недели"},
-{"command":"reboot","description":"Перезагрузить роутер"},
-{"command":"help","description":"Список команд"}]}' "$API/setMyCommands" >/dev/null 2>&1
+{"command":"help","description":"Все команды"}]}' "$API/setMyCommands" >/dev/null 2>&1
 }
 
 watch_del() {
@@ -261,9 +268,8 @@ watch_tick() {
         if [ "$cur" = "up" ]; then
             if [ "$state" = "away" ]; then
                 gone=$(fmt_dur $((now - since)))
-                if [ "$mode" = "home" ]; then qsend "$name пришёл домой (не было $gone)"
-                else qsend "$name снова в сети (не было $gone)"; fi
-                log_event presence "$name вернулся"
+                if [ "$mode" = "home" ]; then log_event presence "$name пришёл домой (не было $gone)"
+                else log_event presence "$name снова в сети (не было $gone)"; fi
             fi
             [ "$state" != "here" ] && since=$now
             echo "here 0 $since" > "$sf"
@@ -271,9 +277,8 @@ watch_tick() {
             miss=$((miss + 1))
             thr=$HOME_LEAVE_MIN; [ "$mode" = "alive" ] && thr=$ALIVE_DOWN_MIN
             if [ "$state" = "here" ] && [ "$miss" -ge "$thr" ]; then
-                if [ "$mode" = "home" ]; then qsend "$name ушёл из дома"
-                else qsend "$name не отвечает уже $thr мин. Проверьте питание и Wi-Fi."; fi
-                log_event presence "$name пропал"
+                if [ "$mode" = "home" ]; then log_event presence "$name ушёл из дома"
+                else log_event presence "$name не отвечает уже $thr мин"; fi
                 state=away; since=$now
             fi
             echo "$state $miss $since" > "$sf"
@@ -604,8 +609,8 @@ vpn_ipname() {   # 10.0.0.x -> имя VPN-пользователя
 
 # ---------- очередь недоставленных уведомлений ----------
 OUTBOX=/tmp/tgbot.outbox
-qsend() {   # как send, но при неудаче кладёт в очередь (отправится позже из cron)
-    send "$1" && return 0
+qsend() {   # текст [q]: как send, но при неудаче кладёт в очередь (отправится позже из cron, без звука)
+    send "$1" "$2" && return 0
     mkdir -p "$OUTBOX"; printf '%s' "$1" > "$OUTBOX/$(date +%s).$$.$RANDOM"
     return 1
 }
@@ -613,7 +618,7 @@ flush_outbox() {
     [ -d "$OUTBOX" ] || return 0
     for f in $(ls "$OUTBOX" 2>/dev/null | sort); do
         [ -n "$(find "$OUTBOX/$f" -mmin +360 2>/dev/null)" ] && { rm -f "$OUTBOX/$f"; continue; }
-        send "$(cat "$OUTBOX/$f")" && rm -f "$OUTBOX/$f" || break
+        send "$(cat "$OUTBOX/$f")" q && rm -f "$OUTBOX/$f" || break
     done
 }
 
@@ -639,6 +644,147 @@ house_tick() {   # cron: учитывает только устройства в
     if [ "$hnew" = empty ]; then hk=away; else hk=home; fi
     log_event house "$hk"
     if [ -x "$HOOKS/$hk" ]; then ( "$HOOKS/$hk" >/dev/null 2>&1 & )      # решает и пишет Home Assistant
-    elif [ "$hk" = away ]; then qsend "🏠 Из Wi-Fi пропали все, кто в режиме «Дом»."
-    else qsend "🏠 В Wi-Fi вернулся кто-то из режима «Дом»."; fi
+    elif [ "$hk" = away ]; then qsend "🏠 Из Wi-Fi пропали все, кто в режиме «Дом»." q
+    else qsend "🏠 В Wi-Fi вернулся кто-то из режима «Дом»." q; fi
+}
+
+
+# ---- журнал: события роутера (/etc/tgbot.events) + важное из Home Assistant, с временем ----
+HAENV=/etc/tgbot.ha            # HA_URL и HA_TOKEN (чтение журнала HA); без файла журнал только роутерный
+log_ha() {   # строки «epoch<TAB>текст» за последние 24 ч
+    [ -r "$HAENV" ] || return
+    . "$HAENV"
+    st=$(date -u -d "@$(( $(date +%s) - 86400 ))" +%Y-%m-%dT%H:%M:%SZ)
+    ents="binary_sensor.koridor_otkrytiia_door,binary_sensor.zal_balkon_door,binary_sensor.tualet_dvizhenie_motion,binary_sensor.vibration_sensor_occupancy,input_boolean.house_empty,input_select.heat_mode"
+    curl -s -m 20 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/history/period/$st?filter_entity_id=$ents&minimal_response&no_attributes" 2>/dev/null | jq -r '
+      {"binary_sensor.koridor_otkrytiia_door":{"on":"🚪 Входная дверь открыта","off":"🚪 Входная дверь закрыта"},
+       "binary_sensor.zal_balkon_door":{"on":"🚪 Балкон: дверь открыта","off":"🚪 Балкон: дверь закрыта"},
+       "binary_sensor.tualet_dvizhenie_motion":{"on":"🚽 Движение в туалете"},
+       "binary_sensor.vibration_sensor_occupancy":{"on":"📳 Вибрация"},
+       "input_boolean.house_empty":{"on":"🏠 Дом считается пустым","off":"🏠 Кто-то дома"},
+       "input_select.heat_mode":{"auto":"🌡 Отопление: авто","eco":"🌡 Отопление: эконом","off":"🌡 Отопление: выкл"}} as $m
+      | .[]? | (.[0].entity_id // "") as $e | .[1:][]? | select(.state != null) | (($m[$e] // {})[.state]) as $t | select($t != null)
+      | "\((.last_changed[0:19] + "Z") | fromdateiso8601)\t\($t)"' 2>/dev/null
+}
+log_router() {   # [nopresence|presence] -> строки «epoch<TAB>текст» из журнала роутера за 24 ч
+    cut=$(( $(date +%s) - 86400 ))
+    awk -F'|' -v c="$cut" -v f="$1" '$1>=c && !(f=="nopresence" && $2=="presence") && !(f=="presence" && $2!="presence") {
+        t=$3; e="•"
+        if ($2=="presence") e="📶"; else if ($2=="new") {e="🆕"; t="Новое устройство: " $3}
+        else if ($2=="wan") {e="🌐"; t="Интернета не было " $3 " мин"} else if ($2=="vpn") e="🔐"
+        else if ($2=="site") e="🌍"; else if ($2=="speed") {e="⚡"; t="Скорость " $3}
+        else if ($2=="house") {e="🏠"; t=($3=="away"?"Дом пуст":"Кто-то дома")}
+        print $1 "\t" e " " t }' "$EVENTS" 2>/dev/null
+}
+log_src() {   # фильтр -> строки «epoch<TAB>текст»
+    case "$1" in
+        дом|home|dom) log_ha ;;
+        сеть|net)     log_router nopresence ;;
+        люди|ppl)     log_router presence ;;
+        *)            printf '%s\n%s\n' "$(log_ha)" "$(log_router nopresence)" ;;
+    esac
+}
+log_view() {   # [дом|сеть|люди] — новые сверху, по дням; одинаковые события подряд (в пределах 30 мин) схлопываются
+    case "$1" in дом|home|dom) h="дом";; сеть|net) h="сеть";; люди|ppl) h="кто когда был в сети";; *) h="главное";; esac
+    today=$(date +%Y%m%d)
+    out=$(log_src "$1" | awk -F'\t' 'NF>=2' | sort -t"$(printf '\t')" -k1,1 -n -r | awk -F'\t' '
+        function flush() { if (n) print nt "\t" ot "\t" n "\t" pt; n = 0 }
+        { if ($2 == pt && ot - $1 < 1800) { ot = $1; n++; next } flush(); pt = $2; nt = $1; ot = $1; n = 1 }
+        END { flush() }' | head -n 30 \
+        | while IFS="$(printf '\t')" read nt ot n txt; do
+            d=$(date -d "@$nt" +%Y%m%d)
+            if [ "$d" != "$pd" ]; then
+                [ -n "$pd" ] && echo
+                if [ "$d" = "$today" ]; then echo "Сегодня"; else echo "Вчера"; fi
+                pd=$d
+            fi
+            if [ "$n" -gt 1 ]; then echo "$(date -d "@$ot" +%H:%M)–$(date -d "@$nt" +%H:%M)  $txt ×$n"
+            else echo "$(date -d "@$nt" +%H:%M)  $txt"; fi
+        done)
+    [ -n "$out" ] || out="За последние сутки событий нет."
+    printf '📋 Журнал за сутки: %s\n\n%s' "$h" "$out"
+}
+log_kb() {   # текущий фильтр -> плитки фильтров
+    for f in all dom net ppl; do
+        case "$f" in all) l="Главное";; dom) l="Дом";; net) l="Сеть";; ppl) l="Люди";; esac
+        [ "$f" = "${1:-all}" ] && l="• $l"
+        printf '%s\tlog:%s\t' "$l" "$f"
+    done | sed 's/\t$//' | json_kb
+}
+log_show() {   # фильтр [message_id]: новое сообщение или замена на месте
+    case "$1" in дом|home|dom) f=dom;; сеть|net) f=net;; люди|ppl) f=ppl;; *) f=all;; esac
+    if [ -n "$2" ]; then edit_msg "$2" "$(log_view "$f")" "$(log_kb "$f")"
+    else send_kb "$(log_view "$f")" "$(log_kb "$f")"; fi
+}
+
+# ---- данные Home Assistant: датчики, батареи, погода ----
+ha_states() { [ -r "$HAENV" ] || return 1; . "$HAENV"; curl -s -m 15 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/states" 2>/dev/null; }
+ha_forecast() {   # прогноз на сегодня: «макс мин состояние»
+    [ -r "$HAENV" ] || return 1; . "$HAENV"
+    curl -s -m 15 -X POST -H "Authorization: Bearer $HA_TOKEN" -H 'Content-Type: application/json' \
+        -d '{"entity_id":"weather.home","type":"daily"}' "$HA_URL/api/services/weather/get_forecasts?return_response" 2>/dev/null \
+        | jq -r --arg d "$(date -u +%Y-%m-%d)" '[.service_response["weather.home"].forecast[]? | select(.datetime[0:10] >= $d)][0] // empty | "\((.temperature|round) + 0) \((.templow|round) + 0) \(.condition)"' 2>/dev/null
+}
+# общие jq-определения: комнаты, погода, батареи, пропавшие датчики
+HA_JQ='(map({key: .entity_id, value: .}) | from_entries) as $s
+  | def st($e): ($s[$e].state // "unavailable");
+    def n($e): (st($e) | tonumber? // null);
+    def wx($c): ({"clear-night":"ясно","sunny":"солнечно","partlycloudy":"переменная облачность","cloudy":"облачно","rainy":"дождь","pouring":"ливень","snowy":"снег","snowy-rainy":"мокрый снег","fog":"туман","windy":"ветрено","windy-variant":"ветрено, облачно","hail":"град","lightning":"гроза","lightning-rainy":"гроза с дождём"}[$c] // $c);
+    def rooms: [
+      ("Спальня" as $r | n("sensor.temperatura_temperature") as $t | n("sensor.temperatura_humidity") as $h
+        | if $t then "\($r) \($t)°\(if $h then " · \($h|round)%" else "" end)" else "\($r): датчик не отвечает" end),
+      ("Туалет" as $r | n("sensor.tualet_temp_temperature") as $t | n("sensor.tualet_temp_humidity") as $h
+        | if $t then "\($r) \($t)°\(if $h then " · \($h|round)%" else "" end)" else "\($r): датчик не отвечает" end),
+      ("Зал" as $r | ($s["climate.zal_levyi"].attributes.current_temperature // null) as $t
+        | if $t then "\($r) ≈\($t)° (по радиатору)" else "\($r): нет данных" end)];
+    def thr: (n("input_number.battery_low") // 20);
+    def batt: [.[] | select(.attributes.device_class == "battery" and .attributes.unit_of_measurement == "%"
+        and (.entity_id | startswith("sensor.pixel") | not) and (.state | tonumber? // null) != null)]
+        | sort_by(.state | tonumber)
+        | map({n: (.attributes.friendly_name | rtrimstr(" Батарея") | rtrimstr(" ")), v: (.state | tonumber | round)});
+    def gone: [["binary_sensor.koridor_otkrytiia_door","Входная дверь"],["binary_sensor.zal_balkon_door","Балкон"],
+        ["binary_sensor.tualet_dvizhenie_motion","Движение в туалете"],["sensor.temperatura_temperature","Температура спальня"],
+        ["sensor.tualet_temp_temperature","Температура туалет"],["climate.zal_levyi","Радиатор зал левый"],
+        ["climate.zal_pravyi_divan","Радиатор зал правый"],["climate.spalnia_radiator","Радиатор спальня"],
+        ["climate.tualet_radiator","Радиатор туалет"]] | map(select(st(.[0]) == "unavailable") | .[1]);
+    def heat: ({"auto":"авто","eco":"эконом","off":"выкл"}[st("input_select.heat_mode")] // "?") as $m
+        | n("sensor.tselevaia_temperatura") as $t
+        | "Отопление: \($m)\(if $t then ", цель \($t|round)°" elif $m == "авто" then ", на улице тепло — не греем" else "" end)";
+    def outdoor: ($s["weather.home"].attributes.temperature // null) as $t
+        | if $t then "Улица \($t|round)°, \(wx(st("weather.home")))" else "Улица: нет данных" end;'
+
+sensors_view() {
+    j=$(ha_states) || { echo "Home Assistant не подключён: нет /etc/tgbot.ha."; return; }
+    [ -n "$j" ] || { echo "Home Assistant не отвечает."; return; }
+    echo "$j" | jq -r "$HA_JQ"'
+      "🌡 Температура\n" + (rooms | join("\n")) + "\n" + outdoor + "\n" + heat
+      + "\n\n🔋 Батареи (предупреждаю ниже \(thr|round)%)\n"
+      + (batt | map("\(if .v < thr then "⚠️ " else "" end)\(.n): \(.v)%") | join("\n"))
+      + (gone | if length > 0 then "\n\n📡 Не отвечают: " + join(", ") else "\n\n📡 Все датчики на связи" end)' 2>/dev/null \
+      || echo "Не удалось разобрать ответ Home Assistant."
+}
+
+morning_brief() {   # утренняя сводка: погода, дом, что было ночью, проблемы
+    j=$(ha_states)
+    if [ -n "$j" ]; then
+        fc=$(ha_forecast)
+        house=$(echo "$j" | jq -r --arg fc "$fc" "$HA_JQ"'
+          ($fc | split(" ")) as $f
+          | (if ($f | length) == 3 then "Улица: днём до \($f[0])°, ночью \($f[1])°, \(wx($f[2]))" else outdoor end)
+          + "\nДома: " + (rooms | join(", ")) + "\n" + heat
+          + (batt | map(select(.v < thr)) | if length > 0 then "\n⚠️ Батарейки: " + (map("\(.n) \(.v)%") | join(", ")) else "" end)
+          + (gone | if length > 0 then "\n📡 Не отвечают: " + join(", ") else "" end)' 2>/dev/null)
+    fi
+    # ночь: с 23:00 вчера
+    since=$(( $(date -d "$(date +%Y-%m-%d) 00:00" +%s) - 3600 ))
+    nl=$( { log_ha; log_router nopresence; } | awk -F'\t' -v c="$since" '$1 >= c')
+    door=$(echo "$nl" | grep -c "Входная дверь открыта")
+    ngt=""
+    [ "$door" -gt 0 ] && ngt="входная дверь открывалась $door раз (последний — $(echo "$nl" | grep "Входная дверь открыта" | sort -n | tail -1 | cut -f1 | xargs -I{} date -d @{} +%H:%M))"
+    bal=$(echo "$nl" | grep -c "Балкон: дверь открыта"); [ "$bal" -gt 0 ] && ngt="${ngt:+$ngt; }балкон открывался $bal раз"
+    wan=$(echo "$nl" | grep "Интернета не было" | sed 's/.*Интернета не было //'); [ -n "$wan" ] && ngt="${ngt:+$ngt; }интернет пропадал: $(echo "$wan" | tr '\n' ',' | sed 's/,$//')"
+    nd=$(echo "$nl" | grep -c "Новое устройство"); [ "$nd" -gt 0 ] && ngt="${ngt:+$ngt; }новых устройств в сети: $nd"
+    [ -n "$ngt" ] || ngt="спокойно"
+    printf '☀️ Доброе утро!\n\n%s\n\n🌙 Ночью: %s\n\n🌐 Роутер: %s устройств в сети, %s°C' \
+        "${house:-Home Assistant не ответил.}" "$ngt" "$(clients | wc -l)" "$(( $(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0) / 1000 ))"
 }

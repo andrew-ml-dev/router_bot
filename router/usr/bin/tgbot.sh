@@ -23,7 +23,7 @@ flush_outbox
 
 # ---- загрузка ----
 if [ ! -e "$BOOTFLAG" ]; then
-    if send "$(printf 'Роутер загрузился\n\n%s' "$(status)")"; then
+    if send "$(printf 'Роутер загрузился\n\n%s' "$(status)")" q; then
         touch "$BOOTFLAG"
     fi
 fi
@@ -60,7 +60,7 @@ awk 'NR>1 && $3=="0x2" && $6=="br-lan" {print tolower($4), $1}' /proc/net/arp | 
         send_kb "$(printf 'Новое устройство в сети\nИмя: %s\nПроизводитель: %s\nПодключение: %s\nIP: %s\nMAC: %s\n\n%s' \
             "$(devname "$mac")" "$(vendor "$mac")" "$(connection "$mac")" "$ip" "$mac" "$(lua /usr/bin/tgbot-scan.lua "$ip")")" \
             "{\"inline_keyboard\":[[{\"text\":\"Знаю\",\"callback_data\":\"allow:$mac\"},{\"text\":\"Заблокировать\",\"callback_data\":\"block:$mac\"}]]}" \
-            && { echo "$mac" >> "$KNOWN"; log_event new "$(devname "$mac") ($mac)"; }
+            "$(night && echo q)" && { echo "$mac" >> "$KNOWN"; log_event new "$(devname "$mac") ($mac)"; }
         sleep 1
     fi
 done
@@ -69,7 +69,7 @@ done
 cnt=$(logread 2>/dev/null | grep -c 'Bad password attempt\|Login attempt for nonexistent user')
 last=$(cat "$SSHCNT" 2>/dev/null || echo "$cnt")
 echo "$cnt" > "$SSHCNT"
-[ "$cnt" -ge "$((last + 3))" ] && qsend "Неудачные попытки входа по SSH: +$((cnt - last)) за минуту"
+[ "$cnt" -ge "$((last + 3))" ] && qsend "Неудачные попытки входа по SSH: +$((cnt - last)) за минуту" q
 
 # ---- VPN: подключился / отключился ----
 now=$(date +%s)
@@ -86,9 +86,9 @@ for sec in $(uci -q show wireguard_server | grep -o 'peer_[0-9]*=peers' | cut -d
     elif [ "$prev" != "$online" ]; then
         ep=$(wg show wgserver endpoints 2>/dev/null | grep "^$pub" | cut -f2 | sed 's/:[0-9]*$//')
         if [ "$online" = "1" ]; then
-            send "VPN: $name подключился (с адреса ${ep:-?})" && echo "$online" > "$sf"
+            send "🔐 VPN: $name подключился (с адреса ${ep:-?})" q && echo "$online" > "$sf"
         else
-            send "VPN: $name отключился" && echo "$online" > "$sf"
+            send "🔐 VPN: $name отключился" q && echo "$online" > "$sf"
         fi
     fi
 done
@@ -99,7 +99,7 @@ if ping -c1 -W3 1.1.1.1 >/dev/null 2>&1 || ping -c1 -W3 8.8.8.8 >/dev/null 2>&1;
     if [ -e "$DOWN" ]; then
         since=$(cat "$DOWN"); mins=$(( (now - since) / 60 ))
         if [ "$mins" -ge 2 ]; then
-            send "Интернет вернулся. Не было связи примерно $mins мин." && rm -f "$DOWN" && log_event wan "$mins"
+            send "🌐 Интернет вернулся. Не было связи примерно $mins мин." q && rm -f "$DOWN" && log_event wan "$mins"
         else
             rm -f "$DOWN"
         fi
@@ -140,14 +140,14 @@ if [ $(( mm % 10 )) -eq 0 ] && [ -s "$QLOG" ]; then
         f=/tmp/tgbot.an.$ip
         [ -n "$(find "$f" -mmin -60 2>/dev/null)" ] && continue
         top=$(jq -r --arg ip "$ip" 'select(.IP==$ip) | .QH' /tmp/tgbot.q10 | sort | uniq -c | sort -rn | head -3 | awk '{print "  "$2" ("$1")"}')
-        send "$(printf 'Всплеск DNS-запросов\nУстройство: %s (%s)\nЗапросов за 10 мин: %s (порог %s)\nЧаще всего:\n%s' "$(ipname "$ip")" "$ip" "$c" "$lim" "$top")" && touch "$f"
+        send "$(printf 'Всплеск DNS-запросов\nУстройство: %s (%s)\nЗапросов за 10 мин: %s (порог %s)\nЧаще всего:\n%s' "$(ipname "$ip")" "$ip" "$c" "$lim" "$top")" q && touch "$f"
     done
     jq -r 'select(.Result.IsFiltered==true) | .IP' /tmp/tgbot.q10 2>/dev/null | sort | uniq -c | while read c ip; do
         [ -n "$ip" ] && [ "$c" -ge "$BLOCKED_MAX" ] || continue
         f=/tmp/tgbot.anb.$ip
         [ -n "$(find "$f" -mmin -60 2>/dev/null)" ] && continue
         top=$(jq -r --arg ip "$ip" 'select(.IP==$ip and .Result.IsFiltered==true) | .QH' /tmp/tgbot.q10 | sort | uniq -c | sort -rn | head -3 | awk '{print "  "$2" ("$1")"}')
-        send "$(printf 'Много заблокированных запросов\nУстройство: %s (%s)\nЗаблокировано за 10 мин: %s\nЧаще всего:\n%s' "$(ipname "$ip")" "$ip" "$c" "$top")" && touch "$f"
+        send "$(printf 'Много заблокированных запросов\nУстройство: %s (%s)\nЗаблокировано за 10 мин: %s\nЧаще всего:\n%s' "$(ipname "$ip")" "$ip" "$c" "$top")" q && touch "$f"
     done
     rm -f /tmp/tgbot.q10
 fi
@@ -168,13 +168,13 @@ run_once() {   # ключ команда...: не чаще раза в сутк�
     "$@"
 }
 night_job() { traffic_snap; speed_daily; }
-backup_job() { r=$(do_backup) || send "Еженедельный бэкап не удался: $r"; }
-digest_job() { qsend "$(digest)"; }
+backup_job() { r=$(do_backup) || send "Еженедельный бэкап не удался: $r" q; }
+digest_job() { qsend "$(digest)" q; }
 case "$(date +%H%M)" in 0400) run_once night night_job ;; esac
 case "$stamp" in 70300) run_once backup backup_job ;; 10910) run_once digest digest_job ;; esac
 
-# ---- утренний отчёт 09:00 ----
+# ---- утренняя сводка 09:00 (без звука) ----
 if [ "$(date +%H%M)" = "0900" ] && [ "$(cat /tmp/tgbot.reportday 2>/dev/null)" != "$(date +%Y%m%d)" ]; then
-    send "$(printf 'Доброе утро!\n\n%s\n\n%s' "$(status)" "$(vpn)")" && date +%Y%m%d > /tmp/tgbot.reportday
+    send "$(morning_brief)" q && date +%Y%m%d > /tmp/tgbot.reportday
 fi
 exit 0
