@@ -219,6 +219,7 @@ handle() {
             if [ -z "$pm" ]; then send "Не нашёл устройство: $t"; else send "$(pause_start "$pm" "$pmin")"; fi ;;
         /log)       log_show "$args" ;;
         /sensors)   send "$(sensors_view)" ;;
+        /cal)       send "$(cal_view)" ;;
         /graph)     case "$args" in *влаж*|h*) graph_send h "$(echo "$args" | grep -q 7 && echo 7 || echo 1)" ;; *) graph_send t "$(echo "$args" | grep -q 7 && echo 7 || echo 1)" ;; esac ;;
         /heat)
             [ -x "$HOOKS/heat" ] || { send "Отопление не подключено: нет /etc/tgbot.hooks/heat (см. docs/HOME-ASSISTANT.md)."; return; }
@@ -268,7 +269,7 @@ handle() {
         /start|/help)
             send "$(printf '%s\n' \
 'Удобнее всего — /menu: там всё по разделам.' '' \
-'🏠 Дом' '/heat — отопление (режим, день/ночь ±)' '/graph [влажность] [7] — графики температуры и влажности' '/sensors — температура, влажность, батареи' '/log [дом|сеть|люди] — журнал событий' '/home — кто дома' '' \
+'🏠 Дом' '/heat — отопление (режим, день/ночь ±)' '/graph [влажность] [7] — графики температуры и влажности' '/sensors — температура, влажность, батареи' '/log [дом|сеть|люди] — журнал событий' '/home — кто дома' '/cal — календарь на сегодня и завтра' '' \
 '🌐 Сеть' '/status — роутер' '/clients — кто в сети' '/speedtest, /speedhist — скорость и её история' '/report — DNS за сутки' '/site add|del, /sites — мониторинг сайтов' '' \
 '📱 Устройства' '/watch, /unwatch — слежение' '/pause <устройство> [минут] — пауза интернета' '/block, /unblock — блокировка' '/who <устройство> — какие сайты открывает' '/wake <устройство> — включить по сети' '/scan <устройство> — открытые порты' '/name <устройство> <имя> — переименовать' '' \
 '⚙️ Сервис' '/vpn [add|del Имя] — VPN' '/digest — итоги недели' '/backup — бэкап роутера' '/reboot — перезагрузка')" ;;

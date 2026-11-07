@@ -164,6 +164,7 @@ menu_rows() {   # раздел -> первая строка: заголовок,
         home) printf '%s\n' "🏠 Дом" \
             "Кто дома	cmd:home	Датчики и батареи	cmd:sensors" \
             "📈 Графики	cmd:graph	Журнал дома	cmd:log дом" \
+            "📅 Календарь	cmd:cal" \
             "👋 Ухожу	ask:leave	Выключить всё	ask:off" \
             "‹ Назад	nav:main" ;;
         net) printf '%s\n' "🌐 Сеть" \
@@ -811,6 +812,31 @@ day_weather() {
         end' 2>/dev/null
 }
 
+# ---- календарь: все календари Home Assistant (Remote Calendar по ссылке iCal, Google и т.п.) ----
+cal_view() {   # сегодня и завтра
+    t=$(cal_day 0); rc=$?
+    [ "$rc" = 2 ] && { echo "Календарь не подключён: в Home Assistant нет календарей (см. docs/HOME-ASSISTANT.md, «Календарь»)."; return; }
+    [ "$rc" = 0 ] || { echo "Home Assistant не подключён: нет /etc/tgbot.ha."; return; }
+    m=$(cal_day 1)
+    printf '📅 Сегодня\n%s\n\n📅 Завтра\n%s' "${t:-событий нет}" "${m:-событий нет}"
+}
+cal_day() {   # [смещение в днях: 0 сегодня, 1 завтра] -> строки «время  событие (календарь)», пусто — событий нет
+    [ -r "$HAENV" ] || return 1; . "$HAENV"
+    off=${1:-0}
+    d0=$(( $(date -d "$(date +%Y-%m-%d) 00:00" +%s) + off * 86400 )); d1=$((d0 + 86400))
+    st=$(date -u -d "@$d0" +%Y-%m-%dT%H:%M:%SZ); en=$(date -u -d "@$d1" +%Y-%m-%dT%H:%M:%SZ)
+    cals=$(curl -s -m 10 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/calendars" 2>/dev/null | jq -r '.[]? | "\(.entity_id)\t\(.name)"' 2>/dev/null)
+    [ -n "$cals" ] || return 2
+    ncal=$(echo "$cals" | wc -l)
+    echo "$cals" | while IFS="$(printf '\t')" read ent name; do
+        curl -s -m 15 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/calendars/$ent?start=$st&end=$en" 2>/dev/null \
+        | jq -r --arg n "$name" --argjson many "$([ "$ncal" -gt 1 ] && echo true || echo false)" '.[]? |
+            (if .start.date then "0000\t" + "весь день" else
+               ((.start.dateTime // "") | .[0:19]) as $s | ((.end.dateTime // "") | .[0:19]) as $e
+               | "\($s[11:16] | split(":") | join(""))\t\($s[11:16])–\($e[11:16])" end)
+            + "\t" + (.summary // "без названия") + (if $many then " (\($n))" else "" end)' 2>/dev/null
+    done | sort -n | cut -f2- | awk -F'\t' '{print $1 "  " $2}'
+}
 morning_brief() {   # утренняя сводка: погода, дом, что было ночью, проблемы
     wth=$(day_weather)
     j=$(ha_states)
@@ -829,6 +855,14 @@ morning_brief() {   # утренняя сводка: погода, дом, чт�
     wan=$(echo "$nl" | grep "Интернета не было" | sed 's/.*Интернета не было //'); [ -n "$wan" ] && ngt="${ngt:+$ngt; }интернет пропадал: $(echo "$wan" | tr '\n' ',' | sed 's/,$//')"
     nd=$(echo "$nl" | grep -c "Новое устройство"); [ "$nd" -gt 0 ] && ngt="${ngt:+$ngt; }новых устройств в сети: $nd"
     [ -n "$ngt" ] || ngt="спокойно"
+    cal=$(cal_day 0); rc=$?
+    if [ "$rc" = 0 ]; then
+        [ -n "$cal" ] && cal="📅 Сегодня:
+$cal" || cal="📅 Сегодня событий в календаре нет"
+        house="$cal
+
+${house:-🏠 Home Assistant не ответил.}"
+    fi
     printf '☀️ Доброе утро!\n\n%s\n\n%s\n\n🌙 Ночью: %s' \
         "${wth:-🌤 Прогноз погоды недоступен.}" "${house:-🏠 Home Assistant не ответил.}" "$ngt"
 }
