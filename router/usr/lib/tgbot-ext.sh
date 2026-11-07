@@ -764,14 +764,59 @@ sensors_view() {
       || echo "Не удалось разобрать ответ Home Assistant."
 }
 
+# ---- погода на день: по часам из прогноза HA (met.no), совет по одежде ----
+day_weather() {
+    [ -r "$HAENV" ] || return 1; . "$HAENV"
+    tz=$(date +%z | awk '{s=substr($0,1,1); h=substr($0,2,2); m=substr($0,4,2); print (s=="-"?-1:1)*(h*3600+m*60)}')
+    sunset=$(curl -s -m 10 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/states/sun.sun" 2>/dev/null \
+        | jq -r '.attributes.next_setting // empty | .[0:19] + "Z" | fromdateiso8601' 2>/dev/null)
+    [ -n "$sunset" ] && sunset=$(date -d "@$sunset" +%H:%M)
+    curl -s -m 15 -X POST -H "Authorization: Bearer $HA_TOKEN" -H 'Content-Type: application/json' \
+        -d '{"entity_id":"weather.home","type":"hourly"}' "$HA_URL/api/services/weather/get_forecasts?return_response" 2>/dev/null \
+    | jq -r --argjson tz "$tz" --arg today "$(date +%Y-%m-%d)" --arg sunset "$sunset" '
+      def wx($c): ({"clear-night":"ясно","sunny":"солнечно","partlycloudy":"переменная облачность","cloudy":"облачно","rainy":"дождь","pouring":"ливень","snowy":"снег","snowy-rainy":"мокрый снег","fog":"туман","windy":"ветрено","windy-variant":"ветрено","hail":"град","lightning":"гроза","lightning-rainy":"гроза с дождём"}[$c] // $c);
+      def r: (round + 0);
+      def top: group_by(.) | max_by(length) | .[0];
+      [.service_response["weather.home"].forecast[]?
+        | ((.datetime[0:19] + "Z") | fromdateiso8601) as $t | ($t + $tz) as $l
+        | select(($l | todate | .[0:10]) == $today)
+        | . + {h: (($l % 86400) / 3600 | floor),
+               feels: (.temperature - (.wind_speed / 3.6) * 0.7)}   # грубо: ветер «холодит» ~0.7° на каждый м/с
+        | select(.h >= 7 and .h <= 21)] as $d
+      | if ($d | length) == 0 then empty else
+        def part($a; $b; $n): ([$d[] | select(.h >= $a and .h <= $b)]) as $p
+          | if ($p | length) == 0 then empty else
+            "\($n) \($p | map(.temperature) | min | r)…\($p | map(.temperature) | max | r)°" end;
+        ($d | map(.temperature)) as $tt | ($d | map(.feels) | min) as $fmin
+        | ($d | map(.precipitation // 0) | add) as $pr
+        | ([$d[] | select((.precipitation // 0) > 0.1) | .h]) as $wet
+        | ($d | map(.wind_speed) | max) as $wind
+        | ($d | map(.uv_index // 0) | max) as $uv
+        | ([$d[] | .condition] | map(select(. as $c | ["snowy","snowy-rainy","hail"] | index($c))) | length > 0) as $snow
+        | "🌤 Погода сегодня: \($tt | min | r)…\($tt | max | r)°, \(wx([$d[] | .condition] | top))"
+        + "\n" + ([part(7; 10; "утро"), part(11; 16; "день"), part(17; 21; "вечер")] | join(", "))
+        + "\n" + (if $pr >= 0.3 then "\(if $snow then "❄️ снег" else "☔ осадки" end) \($wet | min)–\($wet | max + 1) ч, около \($pr * 10 | round / 10) мм — \(if $snow then "непромокаемая обувь" else "возьмите зонт" end)"
+                  else "без осадков" end)
+          + ", ветер до \($wind | r) км/ч\(if $wind >= 40 then " — сильный" else "" end)"
+        + "\n👕 " + (if $fmin <= -10 then "пуховик, шапка, перчатки и шарф"
+                    elif $fmin <= 0 then "тёплая куртка, шапка и перчатки"
+                    elif $fmin <= 7 then "куртка или пальто, шапка не помешает"
+                    elif $fmin <= 13 then "лёгкая куртка или плащ"
+                    elif $fmin <= 18 then "ветровка или толстовка"
+                    elif $fmin <= 23 then "футболка, на вечер кофта"
+                    else "лёгкая одежда, вода с собой" end)
+          + " (ощущается от \($fmin | r)°)"
+          + (if $uv >= 5 then "\n🧴 УФ-индекс \($uv | r) — крем от солнца" else "" end)
+          + (if $sunset != "" then "\n🌇 Закат в \($sunset)" else "" end)
+        end' 2>/dev/null
+}
+
 morning_brief() {   # утренняя сводка: погода, дом, что было ночью, проблемы
+    wth=$(day_weather)
     j=$(ha_states)
     if [ -n "$j" ]; then
-        fc=$(ha_forecast)
-        house=$(echo "$j" | jq -r --arg fc "$fc" "$HA_JQ"'
-          ($fc | split(" ")) as $f
-          | (if ($f | length) == 3 then "Улица: днём до \($f[0])°, ночью \($f[1])°, \(wx($f[2]))" else outdoor end)
-          + "\nДома: " + (rooms | join(", ")) + "\n" + heat
+        house=$(echo "$j" | jq -r "$HA_JQ"'
+          "🏠 Дома: " + (rooms | join(", ")) + "\n" + heat
           + (batt | map(select(.v < thr)) | if length > 0 then "\n⚠️ Батарейки: " + (map("\(.n) \(.v)%") | join(", ")) else "" end)
           + (gone | if length > 0 then "\n📡 Не отвечают: " + join(", ") else "" end)' 2>/dev/null)
     fi
@@ -784,8 +829,8 @@ morning_brief() {   # утренняя сводка: погода, дом, чт�
     wan=$(echo "$nl" | grep "Интернета не было" | sed 's/.*Интернета не было //'); [ -n "$wan" ] && ngt="${ngt:+$ngt; }интернет пропадал: $(echo "$wan" | tr '\n' ',' | sed 's/,$//')"
     nd=$(echo "$nl" | grep -c "Новое устройство"); [ "$nd" -gt 0 ] && ngt="${ngt:+$ngt; }новых устройств в сети: $nd"
     [ -n "$ngt" ] || ngt="спокойно"
-    printf '☀️ Доброе утро!\n\n%s\n\n🌙 Ночью: %s\n\n🌐 Роутер: %s устройств в сети, %s°C' \
-        "${house:-Home Assistant не ответил.}" "$ngt" "$(clients | wc -l)" "$(( $(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0) / 1000 ))"
+    printf '☀️ Доброе утро!\n\n%s\n\n%s\n\n🌙 Ночью: %s' \
+        "${wth:-🌤 Прогноз погоды недоступен.}" "${house:-🏠 Home Assistant не ответил.}" "$ngt"
 }
 
 # ---- графики температуры и влажности (PNG рисует /usr/bin/tgbot-chart.lua) ----

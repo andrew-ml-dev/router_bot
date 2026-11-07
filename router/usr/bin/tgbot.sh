@@ -173,8 +173,8 @@ digest_job() { qsend "$(digest)" q; }
 case "$(date +%H%M)" in 0400) run_once night night_job ;; esac
 case "$stamp" in 70300) run_once backup backup_job ;; 10910) run_once digest digest_job ;; esac
 
-# ---- утренняя сводка 09:00 (без звука) ----
-if [ "$(date +%H%M)" = "0900" ] && [ "$(cat /tmp/tgbot.reportday 2>/dev/null)" != "$(date +%Y%m%d)" ]; then
+# ---- утренняя сводка 07:45 (без звука) ----
+if [ "$(date +%H%M)" = "0745" ] && [ "$(cat /tmp/tgbot.reportday 2>/dev/null)" != "$(date +%Y%m%d)" ]; then
     send "$(morning_brief)" q && date +%Y%m%d > /tmp/tgbot.reportday
 fi
 exit 0
