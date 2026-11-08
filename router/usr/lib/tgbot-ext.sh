@@ -868,59 +868,105 @@ ${house:-🏠 Home Assistant не ответил.}"
 }
 
 # ---- графики температуры и влажности (PNG рисует /usr/bin/tgbot-chart.lua) ----
+# Температура: по графику на комнату (Зал, Спальня, Туалет), на каждом три линии:
+# 🔴 температура в комнате, 🟢 цель, 🟠 уставка на радиаторе; полоса внизу — радиатор греет.
+# Датчик зала: ZAL_TEMP_SENSOR в /etc/tgbot.ha; пока не задан — берётся встроенный датчик радиатора.
+graph_kb() {   # k dd
+    printf '%s\n' "$([ "$1" = t ] && echo '• Температура' || echo 'Температура')	g:t$2	$([ "$1" = h ] && echo '• Влажность' || echo 'Влажность')	g:h$2" \
+        "$([ "$2" = 1 ] && echo '• 24 часа' || echo '24 часа')	g:${1}1	$([ "$2" = 7 ] && echo '• 7 дней' || echo '7 дней')	g:${1}7" | json_kb
+}
+
+graph_photo() {   # файл подпись [разметка]
+    if [ -n "$CHART_DRY" ]; then echo "$2"; echo; return; fi   # отладка: в чат не отправляется
+    if [ -n "$3" ]; then
+        curl -s -m 60 -F "chat_id=$CHAT_ID" -F "photo=@$1" -F "caption=$2" -F "reply_markup=$3" "$API/sendPhoto" >/dev/null 2>&1
+    else
+        curl -s -m 60 -F "chat_id=$CHAT_ID" -F "photo=@$1" -F "caption=$2" "$API/sendPhoto" >/dev/null 2>&1
+    fi
+}
+
+graph_room() {   # название датчик climate t0 now tz kb
+    n=$1; sens=$2; clim=$3; t0=$4; now=$5; tz=$6; kb=$7
+    st=$(date -u -d "@$t0" +%Y-%m-%dT%H:%M:%SZ); en=$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)
+    dat=/tmp/tgbot.chart.txt; png=/tmp/tgbot.chart.png
+    ents="sensor.tselevaia_temperatura,$clim"; [ -n "$sens" ] && ents="$ents,$sens"
+    curl -s -m 40 -H "Authorization: Bearer $HA_TOKEN" \
+        "$HA_URL/api/history/period/$st?end_time=$en&filter_entity_id=$ents&significant_changes_only=0" 2>/dev/null \
+      | jq -r --arg s "$sens" --arg c "$clim" --argjson now "$now" '
+        def ts: (.last_changed[0:19] + "Z") | fromdateiso8601;
+        .[]? | (.[0].entity_id // "") as $e
+        | def vals:
+            if $s != "" and $e == $s then [[1, (.state | tonumber?)]]
+            elif $e == "sensor.tselevaia_temperatura" then [[3, (.state | tonumber?)]]
+            elif $e == $c then [[4, .attributes.temperature]] + (if $s == "" then [[1, .attributes.current_temperature]] else [] end)
+            else [] end;
+          ( (.[] | select(.state != null) | . as $p | ($p | vals[]) | select(.[1] != null) | "s \(.[0]) \($p | ts) \(.[1])"),
+            (if $e == $c then
+               [.[] | {t: ts, s: .state}] as $a
+               | range(0; $a | length) as $i | select($a[$i].s == "heat" or $a[$i].s == "heat_cool")
+               | "b \($a[$i].t) \($a[$i + 1].t // $now)"
+             else empty end) )' > "$dat" 2>/dev/null
+    if ! grep -q '^s ' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" < "$dat" 2>/dev/null; then
+        rm -f "$dat" "$png"; return 1
+    fi
+    rng=$(awk '$1=="s" {s=$2; v=$4; if (!(s in mn) || v<mn[s]) mn[s]=v; if (!(s in mx) || v>mx[s]) mx[s]=v}
+        END {for (s in mn) printf "%s %s %s\n", s, mn[s], mx[s]}' "$dat" | sort -n)
+    leg=$(echo "$rng" | while read s a b; do
+        case "$s" in (1) l="🔴 Температура в комнате";; (3) l="🟢 Цель";; (4) l="🟠 Уставка на радиаторе";; (*) l="";; esac
+        [ -n "$l" ] && echo "$l: $a–$b°"
+    done)
+    [ "$dd" = 1 ] && per="24 часа" || per="$dd дней"
+    cap=$(printf '🌡 %s за %s\n%s' "$n" "$per" "$leg")
+    [ -z "$sens" ] && cap=$(printf '%s\nℹ️ Датчика комнаты нет: температура — встроенный датчик радиатора (он у горячего корпуса, завышает).' "$cap")
+    grep -q '^b ' "$dat" && cap=$(printf '%s\n🟧 полоса внизу — радиатор греет' "$cap")
+    graph_photo "$png" "$cap" "$kb"
+    rm -f "$dat" "$png"
+}
+
 graph_send() {   # t|h (температура|влажность) 1|7 (дней)
     k=${1:-t}; dd=${2:-1}
     [ -r "$HAENV" ] || { send "Home Assistant не подключён: нет /etc/tgbot.ha."; return; }
     . "$HAENV"
     now=$(date +%s); t0=$((now - dd * 86400))
-    st=$(date -u -d "@$t0" +%Y-%m-%dT%H:%M:%SZ); en=$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)
-    if [ "$k" = h ]; then
-        ents="sensor.temperatura_humidity,sensor.tualet_temp_humidity,weather.home"
-    else
-        ents="sensor.temperatura_temperature,sensor.tualet_temp_temperature,climate.zal_levyi,weather.home,climate.zal_pravyi_divan,climate.spalnia_radiator,climate.tualet_radiator"
+    tz=$(date +%z | awk '{s=substr($0,1,1); h=substr($0,2,2); m=substr($0,4,2); print (s=="-"?-1:1)*(h*3600+m*60)}')
+    kb=$(graph_kb "$k" "$dd")
+    if [ "$k" = t ]; then
+        rooms="Зал|${ZAL_TEMP_SENSOR:-}|climate.zal_levyi
+Спальня|sensor.temperatura_temperature|climate.spalnia_radiator
+Туалет|sensor.tualet_temp_temperature|climate.tualet_radiator"
+        got=0; cnt=$(echo "$rooms" | wc -l); i=0
+        echo "$rooms" | while IFS='|' read n sens clim; do
+            i=$((i + 1)); m=""; [ "$i" -eq "$cnt" ] && m=$kb
+            graph_room "$n" "$sens" "$clim" "$t0" "$now" "$tz" "$m" || echo "x" >> /tmp/tgbot.chart.fail
+        done
+        if [ -f /tmp/tgbot.chart.fail ] && [ "$(wc -l < /tmp/tgbot.chart.fail)" -ge "$cnt" ]; then
+            send "Нет данных для графика (Home Assistant не ответил или история пуста)."
+        fi
+        rm -f /tmp/tgbot.chart.fail
+        return
     fi
+    st=$(date -u -d "@$t0" +%Y-%m-%dT%H:%M:%SZ); en=$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)
     dat=/tmp/tgbot.chart.txt; png=/tmp/tgbot.chart.png
     curl -s -m 40 -H "Authorization: Bearer $HA_TOKEN" \
-        "$HA_URL/api/history/period/$st?end_time=$en&filter_entity_id=$ents&significant_changes_only=0" 2>/dev/null \
-      | jq -r --arg k "$k" --argjson now "$now" '
+        "$HA_URL/api/history/period/$st?end_time=$en&filter_entity_id=sensor.temperatura_humidity,sensor.tualet_temp_humidity&significant_changes_only=0" 2>/dev/null \
+      | jq -r '
         def ts: (.last_changed[0:19] + "Z") | fromdateiso8601;
-        def val($e):
-          if $k == "h" then
-            (if $e == "sensor.temperatura_humidity" then [1, (.state | tonumber?)]
-             elif $e == "sensor.tualet_temp_humidity" then [2, (.state | tonumber?)]
-             elif $e == "weather.home" then [4, .attributes.humidity] else empty end)
-          else
-            (if $e == "sensor.temperatura_temperature" then [1, (.state | tonumber?)]
-             elif $e == "sensor.tualet_temp_temperature" then [2, (.state | tonumber?)]
-             elif $e == "climate.zal_levyi" then [3, .attributes.current_temperature]
-             elif $e == "weather.home" then [4, .attributes.temperature] else empty end)
-          end;
         .[]? | (.[0].entity_id // "") as $e
-        | ( (.[] | select(.state != null) | . as $p | val($e) as $v | select($v[1] != null) | "\(if $v[0] == 4 then "o" else "s" end) \($v[0]) \($p | ts) \($v[1])"),
-            (if $k == "t" and ($e | startswith("climate.")) then
-               [.[] | {t: ts, s: .state}] as $a
-               | range(0; $a | length) as $i | select($a[$i].s == "heat" or $a[$i].s == "heat_cool")
-               | "b \($a[$i].t) \($a[$i + 1].t // $now)"
-             else empty end) )' > "$dat" 2>/dev/null
-    tz=$(date +%z | awk '{s=substr($0,1,1); h=substr($0,2,2); m=substr($0,4,2); print (s=="-"?-1:1)*(h*3600+m*60)}')
+        | .[] | select(.state != null) | . as $p
+        | (if $e == "sensor.temperatura_humidity" then [1, (.state | tonumber?)]
+           elif $e == "sensor.tualet_temp_humidity" then [2, (.state | tonumber?)] else empty end) as $v
+        | select($v[1] != null) | "s \($v[0]) \($p | ts) \($v[1])"' > "$dat" 2>/dev/null
     if ! grep -q '^s ' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" < "$dat" 2>/dev/null; then
         rm -f "$dat" "$png"; send "Нет данных для графика (Home Assistant не ответил или история пуста)."; return
     fi
-    rng=$(awk '$1=="s" || $1=="o" {s=$2; v=$4; if (!(s in mn) || v<mn[s]) mn[s]=v; if (!(s in mx) || v>mx[s]) mx[s]=v}
+    rng=$(awk '$1=="s" {s=$2; v=$4; if (!(s in mn) || v<mn[s]) mn[s]=v; if (!(s in mx) || v>mx[s]) mx[s]=v}
         END {for (s in mn) printf "%s %s %s\n", s, mn[s], mx[s]}' "$dat" | sort -n)
-    u="°"; [ "$k" = h ] && u="%"
     leg=$(echo "$rng" | while read s a b; do
-        case "$k$s" in (t1|h1) n="🔴 Спальня";; (t2|h2) n="🔵 Туалет";; (t3) n="🟢 Зал (по радиатору)";; (t4|h4) n="🌤 Улица (на графике нет)";; (*) n="";; esac
-        [ -n "$n" ] && echo "$n: $a–$b$u"
+        case "$s" in (1) l="🔴 Спальня";; (2) l="🔵 Туалет";; (*) l="";; esac
+        [ -n "$l" ] && echo "$l: $a–$b%"
     done)
-    if [ "$k" = h ]; then ttl="💧 Влажность"; else ttl="🌡 Температура"; fi
     [ "$dd" = 1 ] && per="24 часа" || per="$dd дней"
-    cap=$(printf '%s за %s\n%s' "$ttl" "$per" "$leg")
-    [ "$k" = t ] && grep -q '^b ' "$dat" && cap=$(printf '%s\n🟧 полоса внизу — включён хотя бы один радиатор' "$cap")
-    [ "$k" = h ] && cap=$(printf '%s\nНорма 40–60%%. Выше 65%% — риск плесени, ниже 35%% — сухо.' "$cap")
-    kb=$(printf '%s\n' "$([ "$k" = t ] && echo '• Температура' || echo 'Температура')	g:t$dd	$([ "$k" = h ] && echo '• Влажность' || echo 'Влажность')	g:h$dd" \
-        "$([ "$dd" = 1 ] && echo '• 24 часа' || echo '24 часа')	g:${k}1	$([ "$dd" = 7 ] && echo '• 7 дней' || echo '7 дней')	g:${k}7" | json_kb)
-    if [ -n "$CHART_DRY" ]; then echo "$cap"; return; fi   # отладка: файл остаётся в /tmp, в чат не отправляется
-    curl -s -m 60 -F "chat_id=$CHAT_ID" -F "photo=@$png" -F "caption=$cap" -F "reply_markup=$kb" "$API/sendPhoto" >/dev/null 2>&1
+    cap=$(printf '💧 Влажность за %s\n%s\nНорма 40–60%%. Выше 65%% — риск плесени, ниже 35%% — сухо.' "$per" "$leg")
+    graph_photo "$png" "$cap" "$kb"
     rm -f "$dat" "$png"
 }
