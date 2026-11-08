@@ -3,5 +3,5 @@
 # Токен: HA → профиль пользователя → «Безопасность» → «Долгосрочные токены доступа» → «Создать токен».
 HA_URL=http://192.168.8.112:8123
 HA_TOKEN=вставьте_токен
-# Датчик температуры зала (entity_id в HA). Пока не задан, график и отопление берут встроенный датчик радиатора.
-#ZAL_TEMP_SENSOR=sensor.zal_temperatura_temperature
+# Датчик температуры зала для графика (по умолчанию sensor.spalnia_temperatura_temperature).
+#ZAL_TEMP_SENSOR=sensor.spalnia_temperatura_temperature

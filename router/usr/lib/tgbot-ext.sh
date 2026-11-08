@@ -736,15 +736,15 @@ HA_JQ='(map({key: .entity_id, value: .}) | from_entries) as $s
         | if $t then "\($r) \($t)°\(if $h then " · \($h|round)%" else "" end)" else "\($r): датчик не отвечает" end),
       ("Туалет" as $r | n("sensor.tualet_temp_temperature") as $t | n("sensor.tualet_temp_humidity") as $h
         | if $t then "\($r) \($t)°\(if $h then " · \($h|round)%" else "" end)" else "\($r): датчик не отвечает" end),
-      ("Зал" as $r | ($s["climate.zal_levyi"].attributes.current_temperature // null) as $t
-        | if $t then "\($r) ≈\($t)° (по радиатору)" else "\($r): нет данных" end)];
+      ("Зал" as $r | n("sensor.spalnia_temperatura_temperature") as $t | n("sensor.spalnia_temperatura_humidity") as $h
+        | if $t then "\($r) \($t)°\(if $h then " · \($h|round)%" else "" end)" else "\($r): датчик не отвечает" end)];
     def thr: (n("input_number.battery_low") // 20);
     def batt: [.[] | select(.attributes.device_class == "battery" and .attributes.unit_of_measurement == "%"
         and (.entity_id | startswith("sensor.pixel") | not) and (.state | tonumber? // null) != null)]
         | sort_by(.state | tonumber)
         | map({n: (.attributes.friendly_name | rtrimstr(" Батарея") | rtrimstr(" ")), v: (.state | tonumber | round)});
     def gone: [["binary_sensor.koridor_otkrytiia_door","Входная дверь"],
-        ["binary_sensor.tualet_dvizhenie_motion","Движение в туалете"],["sensor.temperatura_temperature","Температура спальня"],
+        ["binary_sensor.tualet_dvizhenie_motion","Движение прихожая"],["binary_sensor.motion_sensor_2_motion","Движение в туалете"],["sensor.spalnia_temperatura_temperature","Температура зал"],["sensor.temperatura_temperature","Температура спальня"],
         ["sensor.tualet_temp_temperature","Температура туалет"],["climate.zal_levyi","Радиатор зал левый"],
         ["climate.zal_pravyi_divan","Радиатор зал правый"],["climate.spalnia_radiator","Радиатор спальня"],
         ["climate.tualet_radiator","Радиатор туалет"]] | map(select(st(.[0]) == "unavailable") | .[1]);
@@ -931,7 +931,7 @@ graph_send() {   # t|h (температура|влажность) 1|7 (дней
     tz=$(date +%z | awk '{s=substr($0,1,1); h=substr($0,2,2); m=substr($0,4,2); print (s=="-"?-1:1)*(h*3600+m*60)}')
     kb=$(graph_kb "$k" "$dd")
     if [ "$k" = t ]; then
-        rooms="Зал|${ZAL_TEMP_SENSOR:-}|climate.zal_levyi
+        rooms="Зал|${ZAL_TEMP_SENSOR:-sensor.spalnia_temperatura_temperature}|climate.zal_levyi
 Спальня|sensor.temperatura_temperature|climate.spalnia_radiator
 Туалет|sensor.tualet_temp_temperature|climate.tualet_radiator"
         got=0; cnt=$(echo "$rooms" | wc -l); i=0
@@ -948,13 +948,14 @@ graph_send() {   # t|h (температура|влажность) 1|7 (дней
     st=$(date -u -d "@$t0" +%Y-%m-%dT%H:%M:%SZ); en=$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)
     dat=/tmp/tgbot.chart.txt; png=/tmp/tgbot.chart.png
     curl -s -m 40 -H "Authorization: Bearer $HA_TOKEN" \
-        "$HA_URL/api/history/period/$st?end_time=$en&filter_entity_id=sensor.temperatura_humidity,sensor.tualet_temp_humidity&significant_changes_only=0" 2>/dev/null \
+        "$HA_URL/api/history/period/$st?end_time=$en&filter_entity_id=sensor.temperatura_humidity,sensor.tualet_temp_humidity,sensor.spalnia_temperatura_humidity&significant_changes_only=0" 2>/dev/null \
       | jq -r '
         def ts: (.last_changed[0:19] + "Z") | fromdateiso8601;
         .[]? | (.[0].entity_id // "") as $e
         | .[] | select(.state != null) | . as $p
         | (if $e == "sensor.temperatura_humidity" then [1, (.state | tonumber?)]
-           elif $e == "sensor.tualet_temp_humidity" then [2, (.state | tonumber?)] else empty end) as $v
+           elif $e == "sensor.tualet_temp_humidity" then [2, (.state | tonumber?)]
+           elif $e == "sensor.spalnia_temperatura_humidity" then [3, (.state | tonumber?)] else empty end) as $v
         | select($v[1] != null) | "s \($v[0]) \($p | ts) \($v[1])"' > "$dat" 2>/dev/null
     if ! grep -q '^s ' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" < "$dat" 2>/dev/null; then
         rm -f "$dat" "$png"; send "Нет данных для графика (Home Assistant не ответил или история пуста)."; return
@@ -962,7 +963,7 @@ graph_send() {   # t|h (температура|влажность) 1|7 (дней
     rng=$(awk '$1=="s" {s=$2; v=$4; if (!(s in mn) || v<mn[s]) mn[s]=v; if (!(s in mx) || v>mx[s]) mx[s]=v}
         END {for (s in mn) printf "%s %s %s\n", s, mn[s], mx[s]}' "$dat" | sort -n)
     leg=$(echo "$rng" | while read s a b; do
-        case "$s" in (1) l="🔴 Спальня";; (2) l="🔵 Туалет";; (*) l="";; esac
+        case "$s" in (1) l="🔴 Спальня";; (2) l="🔵 Туалет";; (3) l="🟢 Зал";; (*) l="";; esac
         [ -n "$l" ] && echo "$l: $a–$b%"
     done)
     [ "$dd" = 1 ] && per="24 часа" || per="$dd дней"
