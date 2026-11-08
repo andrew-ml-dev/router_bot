@@ -657,10 +657,10 @@ log_ha() {   # строки «epoch<TAB>текст» за последние 24 
     [ -r "$HAENV" ] || return
     . "$HAENV"
     st=$(date -u -d "@$(( $(date +%s) - 86400 ))" +%Y-%m-%dT%H:%M:%SZ)
-    ents="binary_sensor.koridor_otkrytiia_door,binary_sensor.tualet_dvizhenie_motion,binary_sensor.vibration_sensor_occupancy,input_boolean.house_empty,input_select.heat_mode"
+    ents="binary_sensor.koridor_otkrytiia_door,binary_sensor.prikhozhaia_dvizhenie_motion,binary_sensor.vibration_sensor_occupancy,input_boolean.house_empty,input_select.heat_mode"
     curl -s -m 20 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/history/period/$st?filter_entity_id=$ents&minimal_response&no_attributes" 2>/dev/null | jq -r '
       {"binary_sensor.koridor_otkrytiia_door":{"on":"🚪 Входная дверь открыта","off":"🚪 Входная дверь закрыта"},
-       "binary_sensor.tualet_dvizhenie_motion":{"on":"🚽 Движение в туалете"},
+       "binary_sensor.prikhozhaia_dvizhenie_motion":{"on":"🚽 Движение в туалете"},
        "binary_sensor.vibration_sensor_occupancy":{"on":"📳 Вибрация"},
        "input_boolean.house_empty":{"on":"🏠 Дом считается пустым","off":"🏠 Кто-то дома"},
        "input_select.heat_mode":{"auto":"🌡 Отопление: авто","eco":"🌡 Отопление: эконом","off":"🌡 Отопление: выкл"}} as $m
@@ -732,11 +732,11 @@ HA_JQ='(map({key: .entity_id, value: .}) | from_entries) as $s
     def n($e): (st($e) | tonumber? // null);
     def wx($c): ({"clear-night":"ясно","sunny":"солнечно","partlycloudy":"переменная облачность","cloudy":"облачно","rainy":"дождь","pouring":"ливень","snowy":"снег","snowy-rainy":"мокрый снег","fog":"туман","windy":"ветрено","windy-variant":"ветрено, облачно","hail":"град","lightning":"гроза","lightning-rainy":"гроза с дождём"}[$c] // $c);
     def rooms: [
-      ("Спальня" as $r | n("sensor.temperatura_temperature") as $t | n("sensor.temperatura_humidity") as $h
+      ("Спальня" as $r | n("sensor.spalnia_temperatura_temperature") as $t | n("sensor.spalnia_temperatura_humidity") as $h
         | if $t then "\($r) \($t)°\(if $h then " · \($h|round)%" else "" end)" else "\($r): датчик не отвечает" end),
       ("Туалет" as $r | n("sensor.tualet_temp_temperature") as $t | n("sensor.tualet_temp_humidity") as $h
         | if $t then "\($r) \($t)°\(if $h then " · \($h|round)%" else "" end)" else "\($r): датчик не отвечает" end),
-      ("Зал" as $r | n("sensor.spalnia_temperatura_temperature") as $t | n("sensor.spalnia_temperatura_humidity") as $h
+      ("Зал" as $r | n("sensor.zal_temperatura_temperature") as $t | n("sensor.zal_temperatura_humidity") as $h
         | if $t then "\($r) \($t)°\(if $h then " · \($h|round)%" else "" end)" else "\($r): датчик не отвечает" end)];
     def thr: (n("input_number.battery_low") // 20);
     def batt: [.[] | select(.attributes.device_class == "battery" and .attributes.unit_of_measurement == "%"
@@ -744,7 +744,7 @@ HA_JQ='(map({key: .entity_id, value: .}) | from_entries) as $s
         | sort_by(.state | tonumber)
         | map({n: (.attributes.friendly_name | rtrimstr(" Батарея") | rtrimstr(" ")), v: (.state | tonumber | round)});
     def gone: [["binary_sensor.koridor_otkrytiia_door","Входная дверь"],
-        ["binary_sensor.tualet_dvizhenie_motion","Движение прихожая"],["binary_sensor.motion_sensor_2_motion","Движение в туалете"],["sensor.spalnia_temperatura_temperature","Температура зал"],["sensor.temperatura_temperature","Температура спальня"],
+        ["binary_sensor.prikhozhaia_dvizhenie_motion","Движение прихожая"],["binary_sensor.tualet_dvizhenie_motion","Движение в туалете"],["sensor.zal_temperatura_temperature","Температура зал"],["sensor.spalnia_temperatura_temperature","Температура спальня"],
         ["sensor.tualet_temp_temperature","Температура туалет"],["climate.zal_levyi","Радиатор зал левый"],
         ["climate.zal_pravyi_divan","Радиатор зал правый"],["climate.spalnia_radiator","Радиатор спальня"],
         ["climate.tualet_radiator","Радиатор туалет"]] | map(select(st(.[0]) == "unavailable") | .[1]);
@@ -870,7 +870,7 @@ ${house:-🏠 Home Assistant не ответил.}"
 # ---- графики температуры и влажности (PNG рисует /usr/bin/tgbot-chart.lua) ----
 # Температура: по графику на комнату (Зал, Спальня, Туалет), на каждом три линии:
 # 🔴 температура в комнате, 🟢 цель, 🟠 уставка на радиаторе; полоса внизу — радиатор греет.
-# Датчик зала: ZAL_TEMP_SENSOR в /etc/tgbot.ha; пока не задан — берётся встроенный датчик радиатора.
+# Датчик зала: ZAL_TEMP_SENSOR в /etc/tgbot.ha (по умолчанию sensor.zal_temperatura_temperature); если пуст — встроенный датчик радиатора.
 graph_kb() {   # k dd
     printf '%s\n' "$([ "$1" = t ] && echo '• Температура' || echo 'Температура')	g:t$2	$([ "$1" = h ] && echo '• Влажность' || echo 'Влажность')	g:h$2" \
         "$([ "$2" = 1 ] && echo '• 24 часа' || echo '24 часа')	g:${1}1	$([ "$2" = 7 ] && echo '• 7 дней' || echo '7 дней')	g:${1}7" | json_kb
@@ -937,8 +937,8 @@ graph_send() {   # t|h (температура|влажность) 1|7 (дней
     tz=$(date +%z | awk '{s=substr($0,1,1); h=substr($0,2,2); m=substr($0,4,2); print (s=="-"?-1:1)*(h*3600+m*60)}')
     kb=$(graph_kb "$k" "$dd")
     if [ "$k" = t ]; then
-        rooms="Зал|${ZAL_TEMP_SENSOR:-sensor.spalnia_temperatura_temperature}|climate.zal_levyi
-Спальня|sensor.temperatura_temperature|climate.spalnia_radiator
+        rooms="Зал|${ZAL_TEMP_SENSOR:-sensor.zal_temperatura_temperature}|climate.zal_levyi
+Спальня|sensor.spalnia_temperatura_temperature|climate.spalnia_radiator
 Туалет|sensor.tualet_temp_temperature|climate.tualet_radiator"
         got=0; cnt=$(echo "$rooms" | wc -l); i=0
         echo "$rooms" | while IFS='|' read n sens clim; do
@@ -954,14 +954,14 @@ graph_send() {   # t|h (температура|влажность) 1|7 (дней
     st=$(date -u -d "@$t0" +%Y-%m-%dT%H:%M:%SZ); en=$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)
     dat=/tmp/tgbot.chart.txt; png=/tmp/tgbot.chart.png
     curl -s -m 40 -H "Authorization: Bearer $HA_TOKEN" \
-        "$HA_URL/api/history/period/$st?end_time=$en&filter_entity_id=sensor.temperatura_humidity,sensor.tualet_temp_humidity,sensor.spalnia_temperatura_humidity&significant_changes_only=0" 2>/dev/null \
+        "$HA_URL/api/history/period/$st?end_time=$en&filter_entity_id=sensor.spalnia_temperatura_humidity,sensor.tualet_temp_humidity,sensor.zal_temperatura_humidity&significant_changes_only=0" 2>/dev/null \
       | jq -r '
         def ts: (.last_changed[0:19] + "Z") | fromdateiso8601;
         .[]? | (.[0].entity_id // "") as $e
         | .[] | select(.state != null) | . as $p
-        | (if $e == "sensor.temperatura_humidity" then [1, (.state | tonumber?)]
+        | (if $e == "sensor.spalnia_temperatura_humidity" then [1, (.state | tonumber?)]
            elif $e == "sensor.tualet_temp_humidity" then [2, (.state | tonumber?)]
-           elif $e == "sensor.spalnia_temperatura_humidity" then [3, (.state | tonumber?)] else empty end) as $v
+           elif $e == "sensor.zal_temperatura_humidity" then [3, (.state | tonumber?)] else empty end) as $v
         | select($v[1] != null) | "s \($v[0]) \($p | ts) \($v[1])"' > "$dat" 2>/dev/null
     if ! grep -q '^s ' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" "%" < "$dat" 2>/dev/null; then
         rm -f "$dat" "$png"; send "Нет данных для графика (Home Assistant не ответил или история пуста)."; return
