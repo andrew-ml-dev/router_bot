@@ -877,7 +877,11 @@ graph_kb() {   # k dd
 }
 
 graph_photo() {   # файл подпись [разметка]
-    if [ -n "$CHART_DRY" ]; then echo "$2"; echo; return; fi   # отладка: в чат не отправляется
+    if [ -n "$CHART_DRY" ]; then   # отладка: в чат не отправляется; CHART_DRY=<папка> — сохранить PNG туда
+        echo "$2"; echo
+        [ -d "$CHART_DRY" ] && cp "$1" "$CHART_DRY/chart$(ls "$CHART_DRY" | wc -l).png"
+        return
+    fi
     if [ -n "$3" ]; then
         curl -s -m 60 -F "chat_id=$CHAT_ID" -F "photo=@$1" -F "caption=$2" -F "reply_markup=$3" "$API/sendPhoto" >/dev/null 2>&1
     else
@@ -896,23 +900,24 @@ graph_room() {   # название датчик climate t0 now tz kb
         def ts: (.last_changed[0:19] + "Z") | fromdateiso8601;
         .[]? | (.[0].entity_id // "") as $e
         | def vals:
-            if $s != "" and $e == $s then [[1, (.state | tonumber?)]]
-            elif $e == "sensor.tselevaia_temperatura" then [[3, (.state | tonumber?)]]
-            elif $e == $c then [[4, .attributes.temperature]] + (if $s == "" then [[1, .attributes.current_temperature]] else [] end)
+            if $s != "" and $e == $s then [[1, ((.state | tonumber?) // "-")]]
+            elif $e == "sensor.tselevaia_temperatura" then [[3, ((.state | tonumber?) // "-")]]
+            elif $e == $c then [[4, (if .state == "heat" or .state == "heat_cool" then (.attributes.temperature // "-") else "-" end)]]
+                 + (if $s == "" then [[1, (.attributes.current_temperature // "-")]] else [] end)
             else [] end;
-          ( (.[] | select(.state != null) | . as $p | ($p | vals[]) | select(.[1] != null) | "s \(.[0]) \($p | ts) \(.[1])"),
+          ( (.[] | select(.state != null) | . as $p | ($p | vals[]) | "s \(.[0]) \($p | ts) \(.[1])"),
             (if $e == $c then
                [.[] | {t: ts, s: .state}] as $a
                | range(0; $a | length) as $i | select($a[$i].s == "heat" or $a[$i].s == "heat_cool")
                | "b \($a[$i].t) \($a[$i + 1].t // $now)"
              else empty end) )' > "$dat" 2>/dev/null
-    if ! grep -q '^s ' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" < "$dat" 2>/dev/null; then
+    if ! grep -q '^s [0-9]* [0-9]* [0-9]' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" < "$dat" 2>/dev/null; then
         rm -f "$dat" "$png"; return 1
     fi
-    rng=$(awk '$1=="s" {s=$2; v=$4; if (!(s in mn) || v<mn[s]) mn[s]=v; if (!(s in mx) || v>mx[s]) mx[s]=v}
+    rng=$(awk '$1=="s" && $4!="-" {s=$2; v=$4+0; if (!(s in mn) || v<mn[s]) mn[s]=v; if (!(s in mx) || v>mx[s]) mx[s]=v}
         END {for (s in mn) printf "%s %s %s\n", s, mn[s], mx[s]}' "$dat" | sort -n)
     leg=$(echo "$rng" | while read s a b; do
-        case "$s" in (1) l="🔴 Температура в комнате";; (3) l="🟢 Цель";; (4) l="🟠 Уставка на радиаторе";; (*) l="";; esac
+        case "$s" in (1) l="🔴 Температура в комнате";; (3) l="🟢 Цель";; (4) l="🟠 Уставка на радиаторе (когда включён)";; (*) l="";; esac
         [ -n "$l" ] && echo "$l: $a–$b°"
     done)
     [ "$dd" = 1 ] && per="24 часа" || per="$dd дней"

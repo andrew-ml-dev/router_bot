@@ -1,6 +1,6 @@
 -- Линейный график в PNG без внешних библиотек (палитра, zlib «хранимыми» блоками).
 -- Использование: lua tgbot-chart.lua out.png t0 t1 tz_offset_sec [единица] < данные
--- Данные (по строке):  s <серия 1..5> <epoch> <значение>   — точка серии
+-- Данные (по строке):  s <серия 1..5> <epoch> <значение>   — точка серии («-» вместо значения — разрыв линии)
 --                      b <epoch_начала> <epoch_конца>        — полоса «грело» внизу графика
 -- Цвета серий: 1 красный, 2 синий, 3 зелёный, 4 оранжевый, 5 фиолетовый.
 local bit = require "bit"
@@ -55,10 +55,10 @@ for l in io.lines() do
     local a, b, c, d = l:match("^(%a)%s+(%S+)%s+(%S+)%s*(%S*)")
     if a == "s" then
         local s, t, v = tonumber(b), tonumber(c), tonumber(d)
-        if s and t and v then
+        if s and t and (v or d == "-") then
             ser[s] = ser[s] or {}
-            table.insert(ser[s], { t, v })
-            vmin = (vmin and math.min(vmin, v)) or v; vmax = (vmax and math.max(vmax, v)) or v
+            table.insert(ser[s], { t, v or false })
+            if v then vmin = (vmin and math.min(vmin, v)) or v; vmax = (vmax and math.max(vmax, v)) or v end
         end
     elseif a == "b" then
         local s, e = tonumber(b), tonumber(c)
@@ -106,10 +106,10 @@ for s, pts in pairs(ser) do
     for i = 1, #pts do
         local ta = math.max(pts[i][1], t0)
         local tb = (pts[i + 1] and pts[i + 1][1]) or t1
-        if tb > t0 then
+        if tb > t0 and pts[i][2] then
             local y = Y(pts[i][2])
             line(X(ta), y, X(tb), y, c, 2)
-            if pts[i + 1] then line(X(tb), y, X(tb), Y(pts[i + 1][2]), c, 2) end
+            if pts[i + 1] and pts[i + 1][2] then line(X(tb), y, X(tb), Y(pts[i + 1][2]), c, 2) end
         end
     end
 end

@@ -127,6 +127,28 @@ disk=$(df /overlay 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}')
 
 mm=$(date +%M); mm=${mm#0}; [ -z "$mm" ] && mm=0
 
+# ---- Home Assistant отвечает? (раз в 2 минуты; молчит 10 минут — тревога) ----
+# Пока HA лежит, отопление и свет никто не контролирует: радиаторы остаются в последнем режиме.
+HA_DOWN_MIN=10
+if [ $(( mm % 2 )) -eq 0 ] && [ -r "$HAENV" ]; then
+    . "$HAENV"
+    hd=/etc/tgbot.ha_down   # epoch начала простоя; в /etc, чтобы пережить перезагрузку роутера
+    if curl -s -m 10 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/" 2>/dev/null | grep -q '^200$'; then
+        if [ -f "$hd" ]; then
+            read since sent < "$hd"
+            [ "$sent" = 1 ] && send "✅ Home Assistant снова работает (не отвечал $(( (now - since) / 60 )) мин). Отопление и автоматика снова под контролем." q
+            rm -f "$hd"
+        fi
+    else
+        [ -f "$hd" ] || echo "$now 0" > "$hd"
+        read since sent < "$hd"
+        if [ "$sent" != 1 ] && [ $(( now - since )) -ge $(( HA_DOWN_MIN * 60 )) ]; then
+            send "⚠️ Home Assistant не отвечает уже $(( (now - since) / 60 )) мин ($HA_URL). Отопление, свет и охрана не работают: радиаторы остаются в последнем режиме. Проверьте питание Raspberry Pi." \
+                && echo "$since 1" > "$hd"
+        fi
+    fi
+fi
+
 # ---- слежение: люди дома, «живые» устройства, сайты ----
 watch_tick
 house_tick
