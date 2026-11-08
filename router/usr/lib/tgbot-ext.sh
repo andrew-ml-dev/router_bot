@@ -911,7 +911,8 @@ graph_room() {   # название датчик climate t0 now tz kb
                | range(0; $a | length) as $i | select($a[$i].s == "heat" or $a[$i].s == "heat_cool")
                | "b \($a[$i].t) \($a[$i + 1].t // $now)"
              else empty end) )' > "$dat" 2>/dev/null
-    if ! grep -q '^s [0-9]* [0-9]* [0-9]' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" < "$dat" 2>/dev/null; then
+    printf 'l 1 line fill\nl 3 dash\nl 4 step\n' >> "$dat"
+    if ! grep -q '^s [0-9]* [0-9]* [0-9]' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" "°" < "$dat" 2>/dev/null; then
         rm -f "$dat" "$png"; return 1
     fi
     rng=$(awk '$1=="s" && $4!="-" {s=$2; v=$4+0; if (!(s in mn) || v<mn[s]) mn[s]=v; if (!(s in mx) || v>mx[s]) mx[s]=v}
@@ -923,7 +924,7 @@ graph_room() {   # название датчик climate t0 now tz kb
     [ "$dd" = 1 ] && per="24 часа" || per="$dd дней"
     cap=$(printf '🌡 %s за %s\n%s' "$n" "$per" "$leg")
     [ -z "$sens" ] && cap=$(printf '%s\nℹ️ Датчика комнаты нет: температура — встроенный датчик радиатора (он у горячего корпуса, завышает).' "$cap")
-    grep -q '^b ' "$dat" && cap=$(printf '%s\n🟧 полоса внизу — радиатор греет' "$cap")
+    grep -q '^b ' "$dat" && cap=$(printf '%s\n🟧 оранжевый фон — радиатор греет; серый фон — ночь (22–06)' "$cap")
     graph_photo "$png" "$cap" "$kb"
     rm -f "$dat" "$png"
 }
@@ -962,7 +963,7 @@ graph_send() {   # t|h (температура|влажность) 1|7 (дней
            elif $e == "sensor.tualet_temp_humidity" then [2, (.state | tonumber?)]
            elif $e == "sensor.spalnia_temperatura_humidity" then [3, (.state | tonumber?)] else empty end) as $v
         | select($v[1] != null) | "s \($v[0]) \($p | ts) \($v[1])"' > "$dat" 2>/dev/null
-    if ! grep -q '^s ' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" < "$dat" 2>/dev/null; then
+    if ! grep -q '^s ' "$dat" || ! lua /usr/bin/tgbot-chart.lua "$png" "$t0" "$now" "$tz" "%" < "$dat" 2>/dev/null; then
         rm -f "$dat" "$png"; send "Нет данных для графика (Home Assistant не ответил или история пуста)."; return
     fi
     rng=$(awk '$1=="s" {s=$2; v=$4; if (!(s in mn) || v<mn[s]) mn[s]=v; if (!(s in mx) || v>mx[s]) mx[s]=v}
@@ -972,7 +973,7 @@ graph_send() {   # t|h (температура|влажность) 1|7 (дней
         [ -n "$l" ] && echo "$l: $a–$b%"
     done)
     [ "$dd" = 1 ] && per="24 часа" || per="$dd дней"
-    cap=$(printf '💧 Влажность за %s\n%s\nНорма 40–60%%. Выше 65%% — риск плесени, ниже 35%% — сухо.' "$per" "$leg")
+    cap=$(printf '💧 Влажность за %s\n%s\nСерый фон — ночь (22–06). Норма 40–60%%. Выше 65%% — риск плесени, ниже 35%% — сухо.' "$per" "$leg")
     graph_photo "$png" "$cap" "$kb"
     rm -f "$dat" "$png"
 }
