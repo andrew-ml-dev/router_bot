@@ -125,32 +125,7 @@ mavail=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
 disk=$(df /overlay 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}')
 [ -n "$disk" ] && [ "$disk" -ge "$DISK_MAX" ] && hw_alert disk "Заканчивается место на роутере: занято $disk%"
 
-# ---- аномалии в DNS (каждые 10 минут, по журналу AdGuard) ----
-QMAX_DAY=500      # запросов с одного устройства за 10 мин (днём)
-QMAX_NIGHT=200    # то же ночью (01:00–06:00)
-BLOCKED_MAX=150   # заблокированных запросов с одного устройства за 10 мин
 mm=$(date +%M); mm=${mm#0}; [ -z "$mm" ] && mm=0
-if [ $(( mm % 10 )) -eq 0 ] && [ -s "$QLOG" ]; then
-    cutoff=$(date -u -d "@$(( now - 600 ))" +%Y-%m-%dT%H:%M 2>/dev/null)
-    jq -c --arg c "$cutoff" 'select(.T > $c)' "$QLOG" 2>/dev/null > /tmp/tgbot.q10
-    hour=$(date +%H); hour=${hour#0}; [ -z "$hour" ] && hour=0; lim=$QMAX_DAY
-    [ "$hour" -ge 1 ] && [ "$hour" -lt 6 ] && lim=$QMAX_NIGHT
-    jq -r '.IP' /tmp/tgbot.q10 2>/dev/null | sort | uniq -c | while read c ip; do
-        [ -n "$ip" ] && [ "$c" -ge "$lim" ] || continue
-        f=/tmp/tgbot.an.$ip
-        [ -n "$(find "$f" -mmin -60 2>/dev/null)" ] && continue
-        top=$(jq -r --arg ip "$ip" 'select(.IP==$ip) | .QH' /tmp/tgbot.q10 | sort | uniq -c | sort -rn | head -3 | awk '{print "  "$2" ("$1")"}')
-        send "$(printf 'Всплеск DNS-запросов\nУстройство: %s (%s)\nЗапросов за 10 мин: %s (порог %s)\nЧаще всего:\n%s' "$(ipname "$ip")" "$ip" "$c" "$lim" "$top")" q && touch "$f"
-    done
-    jq -r 'select(.Result.IsFiltered==true) | .IP' /tmp/tgbot.q10 2>/dev/null | sort | uniq -c | while read c ip; do
-        [ -n "$ip" ] && [ "$c" -ge "$BLOCKED_MAX" ] || continue
-        f=/tmp/tgbot.anb.$ip
-        [ -n "$(find "$f" -mmin -60 2>/dev/null)" ] && continue
-        top=$(jq -r --arg ip "$ip" 'select(.IP==$ip and .Result.IsFiltered==true) | .QH' /tmp/tgbot.q10 | sort | uniq -c | sort -rn | head -3 | awk '{print "  "$2" ("$1")"}')
-        send "$(printf 'Много заблокированных запросов\nУстройство: %s (%s)\nЗаблокировано за 10 мин: %s\nЧаще всего:\n%s' "$(ipname "$ip")" "$ip" "$c" "$top")" q && touch "$f"
-    done
-    rm -f /tmp/tgbot.q10
-fi
 
 # ---- слежение: люди дома, «живые» устройства, сайты ----
 watch_tick

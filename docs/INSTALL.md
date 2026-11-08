@@ -61,7 +61,7 @@ tgbot-ctl on
 
 ## 5. Включите журнал запросов AdGuard Home (для отчётов и аномалий)
 
-Отчёт `/report` и уведомления о всплесках читают файл `/etc/AdGuardHome/data/querylog.json`.
+Отчёт `/report` читает файл `/etc/AdGuardHome/data/querylog.json`.
 В `/etc/AdGuardHome/config.yaml`:
 
 ```yaml
