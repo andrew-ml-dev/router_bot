@@ -212,6 +212,7 @@ handle() {
             send "$(watch_add "$t" "$md")" ;;
         /unwatch)   if [ -n "$args" ]; then send "$(watch_del "$args")"; else unwatch_menu; fi ;;
         /menu)      menu_panel ;;
+        /dom)       dom_show ;;
         /pause)
             [ -n "$args" ] || { pause_menu; return; }
             t=${args%% *}; pmin=""; case "$args" in *" "*) pmin=${args#* } ;; esac
@@ -313,6 +314,13 @@ handle_cb() {
         pzm:*)    r=${data#pzm:}; m=${r%:*}; ui_done "$(pause_start "$m" "${r##*:}")" 12 ;;
         who:*)    m=${data#who:}; tg_delete "$CB_MID"; CB_MID=""; send "$(who_dev "$m")" ;;
         nav:*)    menu_panel "${data#nav:}" "$CB_MID" ;;
+        hp:*)     dom_show "$CB_MID" ;;
+        hl:*)     k=${data#hl:}
+                  if head -n1 /tmp/tgbot.cbtext 2>/dev/null | grep -q '^🏠 Дом ·'; then
+                      dom_light "$k" || toast "Home Assistant не отвечает."
+                      dom_show "$CB_MID"
+                  elif dom_light "$k"; then ui_done "✓ Свет выключен."
+                  else ui_done "Home Assistant не отвечает."; fi ;;
         log:*)    log_show "${data#log:}" "$CB_MID" ;;
         g:t1|g:t7|g:h1|g:h7) g=${data#g:}; tg_delete "$CB_MID"; CB_MID=""; graph_send "$(echo "$g" | cut -c1)" "$(echo "$g" | cut -c2)" ;;
         ask:off)  send_kb "Выключить свет, розетки, телевизор и кондиционеры?" '{"inline_keyboard":[[{"text":"Выключить","callback_data":"haoff:1"},{"text":"Отмена","callback_data":"cancel:0"}]]}' ;;

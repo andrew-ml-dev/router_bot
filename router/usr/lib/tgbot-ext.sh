@@ -166,7 +166,7 @@ menu_rows() {   # раздел -> первая строка: заголовок,
             "📈 Графики	cmd:graph	Журнал дома	cmd:log дом" \
             "📅 Календарь	cmd:cal" \
             "👋 Ухожу	ask:leave	Выключить всё	ask:off" \
-            "‹ Назад	nav:main" ;;
+            "‹ Назад	hp:r" ;;
         net) printf '%s\n' "🌐 Сеть" \
             "Статус роутера	cmd:status	Кто в сети	cmd:clients" \
             "Скорость	cmd:speedtest	История скорости	cmd:speedhist" \
@@ -182,7 +182,7 @@ menu_rows() {   # раздел -> первая строка: заголовок,
             "Бэкап роутера	cmd:backup	Перезагрузка	cmd:reboot" \
             "Помощь	cmd:help	‹ Назад	nav:main" ;;
         *) printf '%s\n' "Меню" \
-            "🏠 Дом	nav:home	🌡 Отопление	cmd:heat" \
+            "🏠 Дом	hp:r	🌡 Отопление	cmd:heat" \
             "📋 Журнал	cmd:log	🌐 Сеть	nav:net" \
             "📱 Устройства	nav:dev	⚙️ Сервис	nav:svc" ;;
     esac
@@ -196,6 +196,7 @@ menu_panel() {   # [раздел] [message_id для редактировани�
 # подсказки при вводе «/»: только частые команды, остальные доступны через /menu и работают, если их набрать
 set_commands() {
     curl -s -m 15 -H 'Content-Type: application/json' -d '{"commands":[
+{"command":"dom","description":"Дом: что включено, свет по комнатам"},
 {"command":"menu","description":"Меню: дом, сеть, устройства, сервис"},
 {"command":"heat","description":"Отопление: температуры и режим"},
 {"command":"sensors","description":"Датчики, температура, батареи"},
@@ -763,6 +764,66 @@ sensors_view() {
       + (batt | map("\(if .v < thr then "⚠️ " else "" end)\(.n): \(.v)%") | join("\n"))
       + (gone | if length > 0 then "\n\n📡 Не отвечают: " + join(", ") else "\n\n📡 Все датчики на связи" end)' 2>/dev/null \
       || echo "Не удалось разобрать ответ Home Assistant."
+}
+
+# ---- панель «Дом»: живой статус и свет по комнатам (одно сообщение, обновляется на месте) ----
+# Свет переключает Home Assistant: бот шлёт команду light:<ключ> / lightsoff в хук heat (webhook «команды из Telegram»).
+DOM_JQ='def lights: [["spalnia","switch.svet_spalnia","Спальня"],["zal","switch.svet_zal","Зал"],["kukhnia","switch.svet_kukhnia","Кухня"],
+        ["koridor","switch.koridor_svet_switch_1","Коридор"],["detskaia","switch.svet_detskaia","Детская"],
+        ["tualet","switch.tualet_svet_switch_1","Туалет"],["sklad","switch.sklad_svet_switch_1","Кладовка"]];
+    def lit: [lights[] | select(st(.[1]) == "on") | .[2]];
+    def room($name; $w; $raw; $hum; $cl): (n($w) // n($raw)) as $t | n($hum) as $h
+        | ([$cl[] | st(.) | (. == "heat" or . == "heat_cool")] | any) as $on
+        | if $t then "\($name) \($t)°\(if $h then " · \($h|round)%" else "" end)\(if $on then " 🔥" else "" end)"
+          else "\($name): датчик не отвечает" end;'
+dom_ent() {   # ключ комнаты -> выключатель в HA
+    case "$1" in
+        spalnia) echo switch.svet_spalnia ;; zal) echo switch.svet_zal ;; kukhnia) echo switch.svet_kukhnia ;;
+        detskaia) echo switch.svet_detskaia ;; koridor) echo switch.koridor_svet_switch_1 ;;
+        tualet) echo switch.tualet_svet_switch_1 ;; sklad) echo switch.sklad_svet_switch_1 ;;
+    esac
+}
+ha_state() {   # entity_id -> состояние
+    [ -r "$HAENV" ] || return 1; . "$HAENV"
+    curl -s -m 5 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/states/$1" 2>/dev/null | jq -r '.state // empty' 2>/dev/null
+}
+dom_text() {   # json состояний -> текст панели
+    echo "$1" | jq -r --arg now "$(date +%H:%M:%S)" "$HA_JQ$DOM_JQ"'
+      "🏠 Дом · \($now)\n"
+      + room("Зал"; "sensor.temperatura_zal"; "sensor.zal_temperatura_temperature"; "sensor.zal_temperatura_humidity"; ["climate.zal_levyi","climate.zal_pravyi_divan"]) + "\n"
+      + room("Спальня"; "sensor.temperatura_spalnia"; "sensor.spalnia_temperatura_temperature"; "sensor.spalnia_temperatura_humidity"; ["climate.spalnia_radiator"]) + "\n"
+      + room("Туалет"; "sensor.temperatura_tualet"; "sensor.tualet_temp_temperature"; "sensor.tualet_temp_humidity"; ["climate.tualet_radiator"]) + "\n"
+      + outdoor + "\n" + heat + "\n\n"
+      + (lit | if length > 0 then "💡 Горит: " + join(", ") else "💡 Свет везде выключен" end)
+      + (st("media_player.living_room_tv_sony") as $tv | if ($tv == "on" or $tv == "playing" or $tv == "paused" or $tv == "idle") then "\n📺 Телевизор включён" else "" end)
+      + (st("binary_sensor.koridor_otkrytiia_door") as $d | if $d == "on" then "\n🚪 Входная дверь открыта" elif $d == "unavailable" then "\n📡 Датчик входной двери не отвечает" else "" end)
+      + (if st("input_boolean.house_empty") == "on" then "\n🏠 Дом считается пустым" else "" end)' 2>/dev/null
+}
+dom_kb() {     # json состояний -> плитки: свет по комнатам (💡 = горит), действия
+    echo "$1" | jq -c "$HA_JQ$DOM_JQ"'
+      (lights | map({text: ((if st(.[1]) == "on" then "💡 " else "" end) + .[2]), callback_data: ("hl:" + .[0])})) as $b
+      | {inline_keyboard: ([range(0; ($b | length); 3) | $b[.:.+3]]
+          + [[{text: "🌑 Выключить весь свет", callback_data: "hl:alloff"}] | select((lit | length) > 0)]
+          + [[{text: "👋 Ухожу", callback_data: "ask:leave"}, {text: "🌡 Отопление", callback_data: "cmd:heat"}],
+             [{text: "🔄 Обновить", callback_data: "hp:r"}, {text: "Ещё ›", callback_data: "nav:home"}, {text: "‹ Меню", callback_data: "nav:main"}]])}' 2>/dev/null
+}
+dom_show() {   # [message_id]: новое сообщение или обновление на месте
+    j=$(ha_states)
+    t=$(dom_text "$j"); kb=$(dom_kb "$j")
+    if [ -z "$t" ] || [ -z "$kb" ]; then
+        if [ -n "$1" ]; then toast "Home Assistant не отвечает."; else send "Home Assistant не отвечает."; fi
+        return
+    fi
+    if [ -n "$1" ]; then edit_msg "$1" "$t" "$kb"; else send_kb "$t" "$kb"; fi
+}
+dom_light() {  # ключ комнаты | alloff: команда в HA, дождаться смены состояния (до 6 с), чтобы панель показала правду
+    [ -x "$HOOKS/heat" ] || return 1
+    if [ "$1" = alloff ]; then "$HOOKS/heat" lightsoff >/dev/null 2>&1 || return 1; sleep 3; return 0; fi
+    de=$(dom_ent "$1"); [ -n "$de" ] || return 1
+    db=$(ha_state "$de")
+    "$HOOKS/heat" "light:$1" >/dev/null 2>&1 || return 1
+    di=0; while [ "$di" -lt 6 ]; do sleep 1; [ "$(ha_state "$de")" != "$db" ] && break; di=$((di + 1)); done
+    return 0
 }
 
 # ---- погода на день: по часам из прогноза HA (met.no), совет по одежде ----
