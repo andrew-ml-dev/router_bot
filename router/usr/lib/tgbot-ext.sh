@@ -1036,7 +1036,7 @@ graph_send() {   # t|h (температура|влажность) 1|7 (дней
 
 # ---- энергия: расход за период по истории HA (свет считается по ваттам ламп, розетки меряют сами) ----
 # Счётчики kWh только растут; падение значения (сбой, перезапуск) пропускается, считается только рост сверх максимума.
-EN_ENTS="sensor.en_light_zal_1,sensor.en_light_zal_2,sensor.en_light_kukhnia_1,sensor.en_light_kukhnia_2,sensor.en_light_spalnia_1,sensor.en_light_spalnia_2,sensor.en_light_detskaia_1,sensor.en_light_detskaia_2,sensor.en_light_koridor,sensor.en_light_tualet,sensor.rozetka_v_zali_total_energy,sensor.vytiazhka_total_energy,sensor.spalnia_tv_podsvetka_ps_total_energy"
+EN_ENTS="sensor.en_light_zal_1,sensor.en_light_zal_2,sensor.en_light_kukhnia_1,sensor.en_light_kukhnia_2,sensor.en_light_spalnia_1,sensor.en_light_spalnia_2,sensor.en_light_detskaia_1,sensor.en_light_detskaia_2,sensor.en_light_koridor,sensor.en_light_tualet,sensor.en_light_sklad,sensor.rozetka_v_zali_total_energy,sensor.vytiazhka_total_energy,sensor.spalnia_tv_podsvetka_ps_total_energy"
 energy_view() {   # дней (1 = сегодня с полуночи)
     [ -r "$HAENV" ] || { echo "Home Assistant не подключён."; return; }; . "$HAENV"
     dd=${1:-1}; now=$(date +%s)
@@ -1050,7 +1050,7 @@ energy_view() {   # дней (1 = сегодня с полуночи)
     [ -n "$hist" ] && [ -n "$st" ] || { echo "Home Assistant не отвечает."; return; }
     printf '%s\n%s' "$hist" "$st" | jq -rs --argjson tz "$tz" --argjson t0 "$t0" --argjson dd "$dd" '
       def ts: (.[0:19] + "Z" | fromdateiso8601);
-      def grp: {"zal":"💡 Зал","kukhnia":"💡 Кухня","spalnia":"💡 Спальня","detskaia":"💡 Детская","koridor":"💡 Коридор","tualet":"💡 Туалет",
+      def grp: {"zal":"💡 Зал","kukhnia":"💡 Кухня","spalnia":"💡 Спальня","detskaia":"💡 Детская","koridor":"💡 Коридор","tualet":"💡 Туалет","sklad":"💡 Кладовка",
                 "sensor.rozetka_v_zali_total_energy":"🔌 Розетка зал","sensor.vytiazhka_total_energy":"🔌 Вытяжка кухня",
                 "sensor.spalnia_tv_podsvetka_ps_total_energy":"🔌 ТВ/PS спальня"};
       def key: if startswith("sensor.en_light_") then (ltrimstr("sensor.en_light_") | split("_")[0]) else . end;
