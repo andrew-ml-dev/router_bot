@@ -658,10 +658,9 @@ log_ha() {   # строки «epoch<TAB>текст» за последние 24 
     [ -r "$HAENV" ] || return
     . "$HAENV"
     st=$(date -u -d "@$(( $(date +%s) - 86400 ))" +%Y-%m-%dT%H:%M:%SZ)
-    ents="binary_sensor.prikhozhaia_dvizhenie_motion,binary_sensor.vibration_sensor_occupancy,input_boolean.house_empty,input_select.heat_mode"
+    ents="binary_sensor.prikhozhaia_dvizhenie_motion,input_boolean.house_empty,input_select.heat_mode"
     curl -s -m 20 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/history/period/$st?filter_entity_id=$ents&minimal_response&no_attributes" 2>/dev/null | jq -r '
       {"binary_sensor.prikhozhaia_dvizhenie_motion":{"on":"🚶 Движение в прихожей"},
-       "binary_sensor.vibration_sensor_occupancy":{"on":"📳 Вибрация"},
        "input_boolean.house_empty":{"on":"🏠 Дом считается пустым","off":"🏠 Кто-то дома"},
        "input_select.heat_mode":{"auto":"🌡 Отопление: авто","eco":"🌡 Отопление: эконом","off":"🌡 Отопление: выкл"}} as $m
       | .[]? | (.[0].entity_id // "") as $e | .[1:][]? | select(.state != null) | (($m[$e] // {})[.state]) as $t | select($t != null)
