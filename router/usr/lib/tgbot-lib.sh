@@ -213,6 +213,7 @@ handle() {
         /unwatch)   if [ -n "$args" ]; then send "$(watch_del "$args")"; else unwatch_menu; fi ;;
         /menu)      menu_panel ;;
         /dom)       dom_show ;;
+        /energy)    case "$args" in 3|7|30) energy_show "$args" ;; *) energy_show 1 ;; esac ;;
         /pause)
             [ -n "$args" ] || { pause_menu; return; }
             t=${args%% *}; pmin=""; case "$args" in *" "*) pmin=${args#* } ;; esac
@@ -270,7 +271,7 @@ handle() {
         /start|/help)
             send "$(printf '%s\n' \
 'Удобнее всего — /menu: там всё по разделам.' '' \
-'🏠 Дом' '/heat — отопление (режим, день/ночь ±)' '/graph [влажность] [7] — графики температуры и влажности' '/sensors — температура, влажность, батареи' '/log [дом|сеть|люди] — журнал событий' '/home — кто дома' '/cal — календарь на сегодня и завтра' '' \
+'🏠 Дом' '/heat — отопление (режим, день/ночь ±)' '/graph [влажность] [7] — графики температуры и влажности' '/energy [3|7|30] — расход электричества' '/sensors — температура, влажность, батареи' '/log [дом|сеть|люди] — журнал событий' '/home — кто дома' '/cal — календарь на сегодня и завтра' '' \
 '🌐 Сеть' '/status — роутер' '/clients — кто в сети' '/speedtest, /speedhist — скорость и её история' '/report — DNS за сутки' '/site add|del, /sites — мониторинг сайтов' '' \
 '📱 Устройства' '/watch, /unwatch — слежение' '/pause <устройство> [минут] — пауза интернета' '/block, /unblock — блокировка' '/who <устройство> — какие сайты открывает' '/wake <устройство> — включить по сети' '/scan <устройство> — открытые порты' '/name <устройство> <имя> — переименовать' '' \
 '⚙️ Сервис' '/vpn [add|del Имя] — VPN' '/digest — итоги недели' '/backup — бэкап роутера' '/reboot — перезагрузка')" ;;
@@ -315,6 +316,7 @@ handle_cb() {
         who:*)    m=${data#who:}; tg_delete "$CB_MID"; CB_MID=""; send "$(who_dev "$m")" ;;
         nav:*)    menu_panel "${data#nav:}" "$CB_MID" ;;
         hp:*)     dom_show "$CB_MID" ;;
+        en:1|en:3|en:7|en:30) energy_show "${data#en:}" "$CB_MID" ;;
         hl:*)     k=${data#hl:}
                   if head -n1 /tmp/tgbot.cbtext 2>/dev/null | grep -q '^🏠 Дом ·'; then
                       dom_light "$k" || toast "Home Assistant не отвечает."

@@ -164,7 +164,7 @@ menu_rows() {   # раздел -> первая строка: заголовок,
         home) printf '%s\n' "🏠 Дом" \
             "Кто дома	cmd:home	Датчики и батареи	cmd:sensors" \
             "📈 Графики	cmd:graph	Журнал дома	cmd:log дом" \
-            "📅 Календарь	cmd:cal" \
+            "⚡ Энергия	cmd:energy	📅 Календарь	cmd:cal" \
             "👋 Ухожу	ask:leave	Выключить всё	ask:off" \
             "‹ Назад	hp:r" ;;
         net) printf '%s\n' "🌐 Сеть" \
@@ -197,6 +197,7 @@ menu_panel() {   # [раздел] [message_id для редактировани�
 set_commands() {
     curl -s -m 15 -H 'Content-Type: application/json' -d '{"commands":[
 {"command":"dom","description":"Дом: что включено, свет по комнатам"},
+{"command":"energy","description":"Расход электричества: день, неделя, месяц"},
 {"command":"menu","description":"Меню: дом, сеть, устройства, сервис"},
 {"command":"heat","description":"Отопление: температуры и режим"},
 {"command":"sensors","description":"Датчики, температура, батареи"},
@@ -1031,4 +1032,67 @@ graph_send() {   # t|h (температура|влажность) 1|7 (дней
     cap=$(printf '💧 Влажность за %s\n%s\nСерый фон — ночь (22–06). Норма 40–60%%. Выше 65%% — риск плесени, ниже 35%% — сухо.' "$per" "$leg")
     graph_photo "$png" "$cap" "$kb"
     rm -f "$dat" "$png"
+}
+
+# ---- энергия: расход за период по истории HA (свет считается по ваттам ламп, розетки меряют сами) ----
+# Счётчики kWh только растут; падение значения (сбой, перезапуск) пропускается, считается только рост сверх максимума.
+EN_ENTS="sensor.en_light_zal_1,sensor.en_light_zal_2,sensor.en_light_kukhnia_1,sensor.en_light_kukhnia_2,sensor.en_light_spalnia_1,sensor.en_light_spalnia_2,sensor.en_light_detskaia_1,sensor.en_light_detskaia_2,sensor.en_light_koridor,sensor.en_light_tualet,sensor.rozetka_v_zali_total_energy,sensor.vytiazhka_total_energy,sensor.spalnia_tv_podsvetka_ps_total_energy"
+energy_view() {   # дней (1 = сегодня с полуночи)
+    [ -r "$HAENV" ] || { echo "Home Assistant не подключён."; return; }; . "$HAENV"
+    dd=${1:-1}; now=$(date +%s)
+    tz=$(date +%z | awk '{s=substr($0,1,1); h=substr($0,2,2); m=substr($0,4,2); print (s=="-"?-1:1)*(h*3600+m*60)}')
+    t0=$(( now - (now + tz) % 86400 - (dd - 1) * 86400 ))
+    iso=$(date -u -d "@$t0" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$t0" +%Y-%m-%dT%H:%M:%SZ)
+    isoe=$(date -u -d "@$((now + 60))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$((now + 60))" +%Y-%m-%dT%H:%M:%SZ)
+    hist=$(curl -s -m 30 -H "Authorization: Bearer $HA_TOKEN" \
+        "$HA_URL/api/history/period/$iso?end_time=$isoe&filter_entity_id=$EN_ENTS&minimal_response&no_attributes" 2>/dev/null)
+    st=$(ha_states)
+    [ -n "$hist" ] && [ -n "$st" ] || { echo "Home Assistant не отвечает."; return; }
+    printf '%s\n%s' "$hist" "$st" | jq -rs --argjson tz "$tz" --argjson t0 "$t0" --argjson dd "$dd" '
+      def ts: (.[0:19] + "Z" | fromdateiso8601);
+      def grp: {"zal":"💡 Зал","kukhnia":"💡 Кухня","spalnia":"💡 Спальня","detskaia":"💡 Детская","koridor":"💡 Коридор","tualet":"💡 Туалет",
+                "sensor.rozetka_v_zali_total_energy":"🔌 Розетка зал","sensor.vytiazhka_total_energy":"🔌 Вытяжка кухня",
+                "sensor.spalnia_tv_podsvetka_ps_total_energy":"🔌 ТВ/PS спальня"};
+      def key: if startswith("sensor.en_light_") then (ltrimstr("sensor.en_light_") | split("_")[0]) else . end;
+      def kwh: if . >= 10 then (. * 10 | round / 10 | tostring) else (. * 100 | round / 100 | tostring) end;
+      (.[1] | map({key: .entity_id, value: .}) | from_entries) as $s
+      | ($s["input_number.energy_price"].state | tonumber? // 0) as $price
+      # приросты [сущность, день, kWh] сверх достигнутого максимума: провалы в 0 после перезапуска не считаются расходом
+      | [.[0][] | (.[0].entity_id) as $e
+          | [.[] | {v: (.state | tonumber? // null), t: (.last_changed // .last_updated // "")} | select(.v != null and .t != "")]
+          | reduce .[] as $p ({m: null, o: []};
+              if .m == null then .m = $p.v
+              elif $p.v > .m then .o += [[$e, ((([($p.t | ts), $t0] | max) + $tz) / 86400 | floor), ($p.v - .m)]] | .m = $p.v
+              else . end)
+          | .o[]] as $inc
+      | ([.[0][] | select(.[0].entity_id | startswith("sensor.en_light_")) | [.[] | select((.state | tonumber? // null) != null)][0].last_changed // empty | ts]
+          | min // null) as $first
+      | ($inc | map(.[2]) | add // 0) as $tot
+      | ($inc | group_by(.[0] | key) | map({n: (grp[.[0][0] | key] // (.[0][0])), k: (map(.[2]) | add)})
+          | map(select(.k >= 0.005)) | sort_by(-.k)) as $by
+      | ($inc | group_by(.[1]) | map({d: .[0][1], k: (map(.[2]) | add)})) as $days
+      | ([$days[].k] | max // 0) as $mx
+      | ($s["sensor.pw_light_total"].state | tonumber? // 0) as $pl
+      | ([("sensor.rozetka_v_zali_power","sensor.vytiazhka_power","sensor.spalnia_tv_podsvetka_ps_power") as $e | ($s[$e].state // "") | tonumber? // 0] | add // 0) as $ps
+      | "⚡ Энергия · " + ({"1":"сегодня","3":"3 дня","7":"неделя","30":"месяц"}[$dd | tostring] // "\($dd) дн.") + "\n"
+        + "Всего: \($tot | kwh) kWh ≈ \(($tot * $price * 100 | round) / 100) zł\n"
+        + "Сейчас: свет \($pl | round) W, розетки \($ps | round) W\n"
+        + (if $first != null and $first > $t0 + 3600 then "Свет учитывается с \($first + $tz | strftime("%d.%m %H:%M"))\n" else "" end)
+        + "\n" + (if ($by | length) > 0 then ($by | map("\(.n): \(.k | kwh) kWh · \((.k * $price * 100 | round) / 100) zł") | join("\n"))
+                  else "Пока ничего не набежало." end)
+        + (if $dd > 1 and ($days | length) > 0 then "\n\nПо дням:\n" + ($days | map(
+            (["чт","пт","сб","вс","пн","вт","ср"][.d % 7]) + " " + (.d * 86400 | strftime("%d.%m")) + " "
+            + ([range(0; (if $mx > 0 then (.k / $mx * 10 | round) else 0 end))] | map("▇") | join("")) + " " + (.k | kwh))
+            | join("\n")) else "" end)
+        + "\n\nСвет оценивается по ваттам ламп, розетки меряют сами. Цена \($price) zł/kWh."' 2>/dev/null \
+      || echo "Не удалось посчитать расход."
+}
+energy_kb() {   # текущий период
+    for p in "1 Сегодня" "3 3 дня" "7 Неделя" "30 Месяц"; do
+        k=${p%% *}; n=${p#* }; [ "$k" = "$1" ] && n="• $n"; printf '%s\t%s\t' "$n" "en:$k"
+    done | sed 's/\t$//'; printf '\n🔄 Обновить\ten:%s\t‹ Дом\thp:r\n' "$1"
+}
+energy_show() {   # дней [message_id]
+    t=$(energy_view "$1"); kb=$(energy_kb "$1" | json_kb)
+    if [ -n "$2" ]; then edit_msg "$2" "$t" "$kb"; else send_kb "$t" "$kb"; fi
 }
