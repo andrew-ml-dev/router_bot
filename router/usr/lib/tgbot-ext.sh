@@ -658,10 +658,9 @@ log_ha() {   # строки «epoch<TAB>текст» за последние 24 
     [ -r "$HAENV" ] || return
     . "$HAENV"
     st=$(date -u -d "@$(( $(date +%s) - 86400 ))" +%Y-%m-%dT%H:%M:%SZ)
-    ents="binary_sensor.koridor_otkrytiia_door,binary_sensor.prikhozhaia_dvizhenie_motion,binary_sensor.vibration_sensor_occupancy,input_boolean.house_empty,input_select.heat_mode"
+    ents="binary_sensor.prikhozhaia_dvizhenie_motion,binary_sensor.vibration_sensor_occupancy,input_boolean.house_empty,input_select.heat_mode"
     curl -s -m 20 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/history/period/$st?filter_entity_id=$ents&minimal_response&no_attributes" 2>/dev/null | jq -r '
-      {"binary_sensor.koridor_otkrytiia_door":{"on":"🚪 Входная дверь открыта","off":"🚪 Входная дверь закрыта"},
-       "binary_sensor.prikhozhaia_dvizhenie_motion":{"on":"🚽 Движение в туалете"},
+      {"binary_sensor.prikhozhaia_dvizhenie_motion":{"on":"🚶 Движение в прихожей"},
        "binary_sensor.vibration_sensor_occupancy":{"on":"📳 Вибрация"},
        "input_boolean.house_empty":{"on":"🏠 Дом считается пустым","off":"🏠 Кто-то дома"},
        "input_select.heat_mode":{"auto":"🌡 Отопление: авто","eco":"🌡 Отопление: эконом","off":"🌡 Отопление: выкл"}} as $m
@@ -744,8 +743,7 @@ HA_JQ='(map({key: .entity_id, value: .}) | from_entries) as $s
         and (.entity_id | startswith("sensor.pixel") | not) and (.state | tonumber? // null) != null)]
         | sort_by(.state | tonumber)
         | map({n: (.attributes.friendly_name | rtrimstr(" Батарея") | rtrimstr(" ")), v: (.state | tonumber | round)});
-    def gone: [["binary_sensor.koridor_otkrytiia_door","Входная дверь"],
-        ["binary_sensor.prikhozhaia_dvizhenie_motion","Движение прихожая"],["binary_sensor.tualet_dvizhenie_motion","Движение в туалете"],["sensor.zal_temperatura_temperature","Температура зал"],["sensor.spalnia_temperatura_temperature","Температура спальня"],
+    def gone: [["binary_sensor.prikhozhaia_dvizhenie_motion","Движение прихожая"],["binary_sensor.tualet_dvizhenie_motion","Движение в туалете"],["sensor.zal_temperatura_temperature","Температура зал"],["sensor.spalnia_temperatura_temperature","Температура спальня"],
         ["sensor.tualet_temp_temperature","Температура туалет"],["climate.zal_levyi","Радиатор зал левый"],
         ["climate.zal_pravyi_divan","Радиатор зал правый"],["climate.spalnia_radiator","Радиатор спальня"],
         ["climate.tualet_radiator","Радиатор туалет"]] | map(select(st(.[0]) == "unavailable") | .[1]);
@@ -796,7 +794,6 @@ dom_text() {   # json состояний -> текст панели
       + outdoor + "\n" + heat + "\n\n"
       + (lit | if length > 0 then "💡 Горит: " + join(", ") else "💡 Свет везде выключен" end)
       + (st("media_player.living_room_tv_sony") as $tv | if ($tv == "on" or $tv == "playing" or $tv == "paused" or $tv == "idle") then "\n📺 Телевизор включён" else "" end)
-      + (st("binary_sensor.koridor_otkrytiia_door") as $d | if $d == "on" then "\n🚪 Входная дверь открыта" elif $d == "unavailable" then "\n📡 Датчик входной двери не отвечает" else "" end)
       + (if st("input_boolean.house_empty") == "on" then "\n🏠 Дом считается пустым" else "" end)' 2>/dev/null
 }
 dom_kb() {     # json состояний -> плитки: свет по комнатам (💡 = горит), действия
@@ -910,9 +907,7 @@ morning_brief() {   # утренняя сводка: погода, дом, чт�
     # ночь: с 23:00 вчера
     since=$(( $(date -d "$(date +%Y-%m-%d) 00:00" +%s) - 3600 ))
     nl=$( { log_ha; log_router nopresence; } | awk -F'\t' -v c="$since" '$1 >= c')
-    door=$(echo "$nl" | grep -c "Входная дверь открыта")
     ngt=""
-    [ "$door" -gt 0 ] && ngt="входная дверь открывалась $door раз (последний — $(echo "$nl" | grep "Входная дверь открыта" | sort -n | tail -1 | cut -f1 | xargs -I{} date -d @{} +%H:%M))"
     wan=$(echo "$nl" | grep "Интернета не было" | sed 's/.*Интернета не было //'); [ -n "$wan" ] && ngt="${ngt:+$ngt; }интернет пропадал: $(echo "$wan" | tr '\n' ',' | sed 's/,$//')"
     nd=$(echo "$nl" | grep -c "Новое устройство"); [ "$nd" -gt 0 ] && ngt="${ngt:+$ngt; }новых устройств в сети: $nd"
     [ -n "$ngt" ] || ngt="спокойно"
